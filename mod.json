@@ -1,0 +1,14 @@
+{
+  "geode": "5.10.1",
+  "version": "v1.0.0",
+  "gd": {
+    "win": "2.2081"
+  },
+  "id": "guccimanefan.nicknames",
+  "name": "Nicknames",
+  "developer": "guccimanefan",
+  "description": "Give your friends whatever display name you want -- see your own nicknames for them everywhere instead of their real GD username.",
+  "tags": [
+    "utility"
+  ]
+}
