@@ -141,6 +141,22 @@ static CCMenuItemSpriteExtra* findButtonByCallback(CCNode* root, CCObject* targe
     return nullptr;
 }
 
+// Every CCMenuItemSpriteExtra anywhere under root -- for dumping what's
+// actually on a page when neither frame-matching nor callback-matching
+// panned out, instead of guessing a third identification mechanism blind.
+static void findAllButtons(CCNode* root, std::vector<CCMenuItemSpriteExtra*>& out) {
+    if (!root)
+        return;
+    auto* children = root->getChildren();
+    if (!children)
+        return;
+    for (auto* child : CCArrayExt<CCNode*>(children)) {
+        if (auto* item = typeinfo_cast<CCMenuItemSpriteExtra*>(child))
+            out.push_back(item);
+        findAllButtons(child, out);
+    }
+}
+
 // The x-coordinate of `label`'s right edge, expressed in `targetSpace`'s
 // own local coordinates -- safe to use even when targetSpace isn't the
 // label's own parent (converts through world space), which matters here
@@ -237,11 +253,35 @@ class $modify(NNProfilePage, ProfilePage) {
         // The real left-column info button turned out NOT to use that
         // same frame after all (a real log showed only ONE match ever
         // found, never two, so guessing a second frame name would just
-        // be another blind guess). Find it by what it actually DOES when
-        // clicked instead -- it calls ProfilePage::onInfo -- which is
-        // exact regardless of its sprite.
-        m_fields->bigInfoIcon =
-            findButtonByCallback(this, this, static_cast<cocos2d::SEL_MenuHandler>(&ProfilePage::onInfo));
+        // be another blind guess). Tried finding it by callback instead
+        // (ProfilePage::onInfo) -- also came back empty, meaning either
+        // the listener isn't literally `this` or the member-function-
+        // pointer comparison doesn't survive however Geode exposes a
+        // bound (but non-hooked) function like this. Rather than guess a
+        // third mechanism, dump every button on the page directly.
+        auto selInfo = static_cast<cocos2d::SEL_MenuHandler>(&ProfilePage::onInfo);
+        m_fields->bigInfoIcon = findButtonByCallback(this, this, selInfo);
+
+        if (!m_fields->bigInfoIcon) {
+            std::vector<CCMenuItemSpriteExtra*> all;
+            findAllButtons(this, all);
+            log::info("[Nicknames] onInfo lookup failed -- dumping all {} buttons on the page:",
+                      all.size());
+            for (auto* btn : all) {
+                auto* p = btn->getParent();
+                auto world = p ? p->convertToWorldSpace(btn->getPosition()) : btn->getPosition();
+                log::info("[Nicknames]   id='{}' world=({:.1f},{:.1f}) size=({:.1f},{:.1f}) "
+                          "listener={} listenerIsThis={} selectorMatchesOnInfo={}",
+                          btn->getID(),
+                          world.x,
+                          world.y,
+                          btn->getContentSize().width,
+                          btn->getContentSize().height,
+                          fmt::ptr(btn->m_pListener),
+                          btn->m_pListener == this,
+                          btn->m_pfnSelector == selInfo);
+            }
+        }
 
         if (m_fields->smallInfoIcon) {
             float rightEdge = labelRightEdgeIn(m_usernameLabel, m_fields->smallInfoIcon->getParent());
