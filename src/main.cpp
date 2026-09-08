@@ -140,11 +140,19 @@ class $modify(NNProfilePage, ProfilePage) {
 
         if (!m_fields->capturedInfoIcon) {
             m_fields->capturedInfoIcon = true;
-            if (auto* parent = m_usernameLabel->getParent()) {
+            auto* parent = m_usernameLabel->getParent();
+            log::info("[Nicknames] label parent={} childCount={}",
+                      fmt::ptr(parent),
+                      parent && parent->getChildren() ? parent->getChildren()->count() : 0);
+            if (parent) {
                 if (auto* children = parent->getChildren()) {
                     for (auto* child : CCArrayExt<CCNode*>(children)) {
+                        log::info("[Nicknames] parent child: {} pos=({:.1f},{:.1f})",
+                                  typeid(*child).name(),
+                                  child->getPositionX(),
+                                  child->getPositionY());
                         auto* item = typeinfo_cast<CCMenuItemSpriteExtra*>(child);
-                        if (!item)
+                        if (!item || m_fields->infoIcon)
                             continue;
                         auto pos = m_usernameLabel->getPosition();
                         auto anchor = m_usernameLabel->getAnchorPoint();
@@ -152,10 +160,12 @@ class $modify(NNProfilePage, ProfilePage) {
                         float rightEdge = pos.x + width * (1.f - anchor.x);
                         m_fields->infoIcon = item;
                         m_fields->infoIconGap = item->getPositionX() - rightEdge;
-                        break;
                     }
                 }
             }
+            log::info("[Nicknames] infoIcon found={} gap={:.1f}",
+                      m_fields->infoIcon != nullptr,
+                      m_fields->infoIconGap);
         }
 
         refreshNameDisplay();
@@ -226,11 +236,19 @@ class $modify(NNProfilePage, ProfilePage) {
         // buttons already use between each other.
         CCMenuItemSpriteExtra* lowest = nullptr;
         CCMenuItemSpriteExtra* secondLowest = nullptr;
+        log::info("[Nicknames] m_buttons={} count={}",
+                  fmt::ptr(m_buttons),
+                  m_buttons ? m_buttons->count() : 0);
         if (m_buttons) {
             for (auto* obj : CCArrayExt<CCObject*>(m_buttons)) {
+                log::info("[Nicknames] m_buttons entry: {}", typeid(*obj).name());
                 auto* item = typeinfo_cast<CCMenuItemSpriteExtra*>(obj);
                 if (!item)
                     continue;
+                log::info("[Nicknames]   -> is a CCMenuItemSpriteExtra @ ({:.1f},{:.1f}) parent={}",
+                          item->getPositionX(),
+                          item->getPositionY(),
+                          fmt::ptr(item->getParent()));
                 if (!lowest || item->getPositionY() < lowest->getPositionY()) {
                     secondLowest = lowest;
                     lowest = item;
@@ -239,6 +257,7 @@ class $modify(NNProfilePage, ProfilePage) {
                 }
             }
         }
+        log::info("[Nicknames] lowest found={}", lowest != nullptr);
 
         if (lowest) {
             float gap = secondLowest ? (secondLowest->getPositionY() - lowest->getPositionY()) : 45.f;
@@ -271,6 +290,17 @@ class $modify(NNProfilePage, ProfilePage) {
             auto localPos = parent->convertToNodeSpace(worldPos);
             btn->setPosition(localPos.x, localPos.y - gap);
             parent->addChild(btn, 100);
+            log::info("[Nicknames] placed change-name btn (cloned) @ ({:.1f},{:.1f}) in parent={} "
+                      "gap={:.1f} btnContentSize=({:.1f},{:.1f}) btnScale={:.2f} visible={} opacity={}",
+                      localPos.x,
+                      localPos.y - gap,
+                      fmt::ptr(parent),
+                      gap,
+                      btn->getContentSize().width,
+                      btn->getContentSize().height,
+                      btn->getScale(),
+                      btn->isVisible(),
+                      (int)btn->getOpacity());
         } else {
             // Couldn't find that button column for some reason -- fall
             // back to a small circle near the username so there's still
@@ -287,6 +317,10 @@ class $modify(NNProfilePage, ProfilePage) {
             btn->setID("nicknames-change-name-btn");
             btn->setPosition(labelPos.x, labelPos.y - 24.f);
             parent->addChild(btn, 100);
+            log::info("[Nicknames] placed change-name btn (fallback circle) @ ({:.1f},{:.1f}) in parent={}",
+                      labelPos.x,
+                      labelPos.y - 24.f,
+                      fmt::ptr(parent));
         }
     }
 
