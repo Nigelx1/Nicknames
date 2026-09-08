@@ -118,6 +118,17 @@ class $modify(NNProfilePage, ProfilePage) {
     struct Fields {
         int accountID = 0;
         std::string realName;
+        // The small "i" info-icon button that sits immediately right of
+        // the username (a completely different button from the big green
+        // one in the left-side column -- that one was never actually the
+        // problem, this one was). It's not exposed as its own field, so
+        // it's found once, right after the REAL name has been laid out
+        // and before anything gets renamed, as the one other clickable
+        // button sharing the label's own parent. gap is its natural,
+        // real distance from the label's right edge at that moment.
+        CCMenuItemSpriteExtra* infoIcon = nullptr;
+        float infoIconGap = 0.f;
+        bool capturedInfoIcon = false;
     };
 
     void loadPageFromUserInfo(GJUserScore* score) {
@@ -126,6 +137,27 @@ class $modify(NNProfilePage, ProfilePage) {
             return;
         m_fields->accountID = score->m_accountID;
         m_fields->realName = score->m_userName;
+
+        if (!m_fields->capturedInfoIcon) {
+            m_fields->capturedInfoIcon = true;
+            if (auto* parent = m_usernameLabel->getParent()) {
+                if (auto* children = parent->getChildren()) {
+                    for (auto* child : CCArrayExt<CCNode*>(children)) {
+                        auto* item = typeinfo_cast<CCMenuItemSpriteExtra*>(child);
+                        if (!item)
+                            continue;
+                        auto pos = m_usernameLabel->getPosition();
+                        auto anchor = m_usernameLabel->getAnchorPoint();
+                        float width = m_usernameLabel->getContentSize().width * m_usernameLabel->getScaleX();
+                        float rightEdge = pos.x + width * (1.f - anchor.x);
+                        m_fields->infoIcon = item;
+                        m_fields->infoIconGap = item->getPositionX() - rightEdge;
+                        break;
+                    }
+                }
+            }
+        }
+
         refreshNameDisplay();
     }
 
@@ -140,6 +172,19 @@ class $modify(NNProfilePage, ProfilePage) {
         auto display = NicknameManager::get()->getDisplayName(m_fields->accountID, m_fields->realName);
         bool hasOverride = display != m_fields->realName;
         m_usernameLabel->setString(display.c_str());
+
+        // Same "position computed once from the real name's width" issue
+        // already fixed for list cells, but for the small info-icon
+        // button next to the name instead of the name label itself --
+        // without this it just sits wherever the real (usually longer)
+        // name put it, leaving a visible gap next to a shorter nickname.
+        if (m_fields->infoIcon) {
+            auto pos = m_usernameLabel->getPosition();
+            auto anchor = m_usernameLabel->getAnchorPoint();
+            float width = m_usernameLabel->getContentSize().width * m_usernameLabel->getScaleX();
+            float rightEdge = pos.x + width * (1.f - anchor.x);
+            m_fields->infoIcon->setPositionX(rightEdge + m_fields->infoIconGap);
+        }
 
         auto* parent = m_usernameLabel->getParent();
         if (!parent)
