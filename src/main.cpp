@@ -29,7 +29,26 @@ static void applyNicknameToChildren(CCNode* root, std::string const& realName, i
         if (auto* label = typeinfo_cast<CCLabelBMFont*>(child)) {
             auto const* str = label->getString();
             if (str && realName == str) {
+                // These cells lay the name out flush against the icon --
+                // the label's own position is computed once, at cell-build
+                // time, from the REAL name's width. Just swapping the
+                // string leaves that position untouched, so a nickname of
+                // a different length visibly drifts off that anchor (a
+                // real screenshot caught this: shorter nicknames floated
+                // toward the row's center instead of sitting where the
+                // icon-adjacent real name did). Recompute the position so
+                // the label's LEFT edge -- not its center -- stays fixed,
+                // which is what actually needs to stay put here.
+                float scaleX = label->getScaleX();
+                float oldWidth = label->getContentSize().width * scaleX;
+                auto anchor = label->getAnchorPoint();
+                auto pos = label->getPosition();
+                float leftEdge = pos.x - oldWidth * anchor.x;
+
                 label->setString(display.c_str());
+
+                float newWidth = label->getContentSize().width * scaleX;
+                label->setPositionX(leftEdge + newWidth * anchor.x);
                 continue;
             }
         }
@@ -127,18 +146,25 @@ class $modify(NNProfilePage, ProfilePage) {
             buttonOffset = 32.f;
         }
 
-        // ButtonSprite::create's own "scale" param wasn't shrinking this
-        // the way its name suggests (a real screenshot showed it rendering
-        // roughly full-size, dwarfing the whole header) -- rather than
-        // chase exactly what that parameter actually scales, force a
-        // known, predictable final size with an explicit setScale on the
-        // menu item itself instead of trusting it.
+        // Nigel's ask (2026-09-07): match the small circular buttons on
+        // the left (info/comment history/USE), not a wide rectangular
+        // text button. Those use baked-in circular graphics unique to
+        // each one -- there's no generic "circle button" GD asset to
+        // reuse -- so this builds one the same way plenty of Geode mods
+        // do: a plain 32x32 circle.png tinted to a color, with a short
+        // label on top, both wrapped in the menu item.
         auto menu = CCMenu::create();
         menu->setID("nicknames-change-name-menu");
 
-        auto spr = ButtonSprite::create("Change Name", "bigFont.fnt", "GJ_button_04.png");
-        auto btn = CCMenuItemSpriteExtra::create(spr, this, menu_selector(NNProfilePage::onChangeName));
-        btn->setScale(0.45f);
+        auto circleBg = CCSprite::create("circle.png");
+        circleBg->setColor({255, 195, 60});
+        auto circleSize = circleBg->getContentSize();
+        auto label = CCLabelBMFont::create("Name", "bigFont.fnt");
+        label->setScale(0.3f);
+        label->setPosition(circleSize.width / 2.f, circleSize.height / 2.f);
+        circleBg->addChild(label);
+
+        auto btn = CCMenuItemSpriteExtra::create(circleBg, this, menu_selector(NNProfilePage::onChangeName));
         menu->addChild(btn);
 
         menu->setPosition(labelPos.x, labelPos.y - buttonOffset);
