@@ -316,7 +316,16 @@ class $modify(NNProfilePage, ProfilePage) {
                 }
             }
 
-            leftMenu->addChild(btn);
+            // A screenshot showed this landing right after the FIRST
+            // button (info) instead of at the end, past USE -- Geode's
+            // AxisLayout sequences children by z-order (documented
+            // directly in Layout.hpp), so the existing buttons almost
+            // certainly carry ascending z-orders matching their visual
+            // sequence (info/chat/use), and adding ours at the default
+            // z=0 tied it with the first one instead of sorting after
+            // the last. An explicitly high z-order sorts it past all of
+            // them regardless of how many there are.
+            leftMenu->addChild(btn, 100);
             if (m_buttons)
                 m_buttons->addObject(btn);
             leftMenu->updateLayout();
