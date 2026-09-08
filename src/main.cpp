@@ -8,6 +8,8 @@
 #include <Geode/modify/ProfilePage.hpp>
 
 #include <unordered_map>
+#include <vector>
+#include <cmath>
 
 using namespace geode::prelude;
 
@@ -82,6 +84,53 @@ static void applyNicknameToChildren(CCNode* root, std::string const& realName, i
     }
 }
 
+// Finds every CCMenuItemSpriteExtra anywhere under root whose displayed
+// sprite uses this exact sprite frame -- matched by texture + rect, since
+// a sprite created from a frame doesn't retain the original string name
+// (so it can't just be compared by name). Used to reliably find GD's own
+// "i" info-icon buttons regardless of where in the page they actually
+// live, instead of assuming a tree position that turned out to be wrong
+// (a real diagnostic log proved the username label's parent has exactly
+// one child -- itself -- and that m_buttons is a 39-entry grab-bag of
+// unrelated page elements, not a clean list of the left-side buttons).
+static void findButtonsWithFrame(CCNode* root, CCSpriteFrame* target,
+                                  std::vector<CCMenuItemSpriteExtra*>& out) {
+    if (!root || !target)
+        return;
+    auto* children = root->getChildren();
+    if (!children)
+        return;
+    for (auto* child : CCArrayExt<CCNode*>(children)) {
+        if (auto* item = typeinfo_cast<CCMenuItemSpriteExtra*>(child)) {
+            if (auto* spr = typeinfo_cast<CCSprite*>(item->m_pNormalImage)) {
+                if (auto* frame = spr->displayFrame()) {
+                    if (frame->getTexture() == target->getTexture() &&
+                        frame->getRect().equals(target->getRect())) {
+                        out.push_back(item);
+                    }
+                }
+            }
+        }
+        findButtonsWithFrame(child, target, out);
+    }
+}
+
+// The x-coordinate of `label`'s right edge, expressed in `targetSpace`'s
+// own local coordinates -- safe to use even when targetSpace isn't the
+// label's own parent (converts through world space), which matters here
+// since the button/icon being positioned relative to the label often
+// lives under a completely different parent than the label itself.
+static float labelRightEdgeIn(CCLabelBMFont* label, CCNode* targetSpace) {
+    auto* labelParent = label->getParent();
+    auto pos = label->getPosition();
+    auto anchor = label->getAnchorPoint();
+    float width = label->getContentSize().width * label->getScaleX();
+    float rightEdgeLocal = pos.x + width * (1.f - anchor.x);
+    CCPoint world = labelParent ? labelParent->convertToWorldSpace({rightEdgeLocal, pos.y})
+                                 : CCPoint(rightEdgeLocal, pos.y);
+    return targetSpace->convertToNodeSpace(world).x;
+}
+
 // Level leaderboards.
 class $modify(NNGJScoreCell, GJScoreCell) {
     void loadFromScore(GJUserScore* score) {
@@ -118,17 +167,21 @@ class $modify(NNProfilePage, ProfilePage) {
     struct Fields {
         int accountID = 0;
         std::string realName;
-        // The small "i" info-icon button that sits immediately right of
-        // the username (a completely different button from the big green
-        // one in the left-side column -- that one was never actually the
-        // problem, this one was). It's not exposed as its own field, so
-        // it's found once, right after the REAL name has been laid out
-        // and before anything gets renamed, as the one other clickable
-        // button sharing the label's own parent. gap is its natural,
-        // real distance from the label's right edge at that moment.
-        CCMenuItemSpriteExtra* infoIcon = nullptr;
-        float infoIconGap = 0.f;
-        bool capturedInfoIcon = false;
+        // Two DIFFERENT buttons share the exact same "i" icon graphic:
+        // a small one immediately right of the username, and a big one
+        // in the left-side column. A real diagnostic log proved neither
+        // lives where earlier attempts assumed (the username label's own
+        // parent has exactly one child -- itself -- and m_buttons is a
+        // 39-entry grab-bag of unrelated page elements, not a clean list
+        // of left-side buttons). Found instead by matching the actual
+        // "GJ_infoIcon_001.png" sprite frame wherever it appears on the
+        // page, then telling the two apart by which is closer to the
+        // username (the small one) vs which sits furthest left (the big
+        // column one) -- captured once, before anything gets renamed.
+        CCMenuItemSpriteExtra* smallInfoIcon = nullptr;
+        float smallInfoIconGap = 0.f;
+        CCMenuItemSpriteExtra* bigInfoIcon = nullptr;
+        bool capturedIcons = false;
     };
 
     void loadPageFromUserInfo(GJUserScore* score) {
@@ -138,43 +191,66 @@ class $modify(NNProfilePage, ProfilePage) {
         m_fields->accountID = score->m_accountID;
         m_fields->realName = score->m_userName;
 
-        if (!m_fields->capturedInfoIcon) {
-            m_fields->capturedInfoIcon = true;
-            auto* parent = m_usernameLabel->getParent();
-            log::info("[Nicknames] label parent={} childCount={}",
-                      fmt::ptr(parent),
-                      parent && parent->getChildren() ? parent->getChildren()->count() : 0);
-            if (parent) {
-                if (auto* children = parent->getChildren()) {
-                    for (auto* child : CCArrayExt<CCNode*>(children)) {
-                        log::info("[Nicknames] parent child: {} pos=({:.1f},{:.1f})",
-                                  typeid(*child).name(),
-                                  child->getPositionX(),
-                                  child->getPositionY());
-                        auto* item = typeinfo_cast<CCMenuItemSpriteExtra*>(child);
-                        if (!item || m_fields->infoIcon)
-                            continue;
-                        auto pos = m_usernameLabel->getPosition();
-                        auto anchor = m_usernameLabel->getAnchorPoint();
-                        float width = m_usernameLabel->getContentSize().width * m_usernameLabel->getScaleX();
-                        float rightEdge = pos.x + width * (1.f - anchor.x);
-                        m_fields->infoIcon = item;
-                        m_fields->infoIconGap = item->getPositionX() - rightEdge;
-                    }
-                }
-            }
-            log::info("[Nicknames] infoIcon found={} gap={:.1f}",
-                      m_fields->infoIcon != nullptr,
-                      m_fields->infoIconGap);
+        if (!m_fields->capturedIcons) {
+            m_fields->capturedIcons = true;
+            captureIcons();
         }
 
         refreshNameDisplay();
     }
 
+    void captureIcons() {
+        auto* frame = CCSpriteFrameCache::sharedSpriteFrameCache()->spriteFrameByName("GJ_infoIcon_001.png");
+        std::vector<CCMenuItemSpriteExtra*> found;
+        findButtonsWithFrame(this, frame, found);
+        log::info("[Nicknames] found {} info-icon-styled buttons", found.size());
+
+        auto* labelParent = m_usernameLabel->getParent();
+        CCPoint labelWorld = labelParent ? labelParent->convertToWorldSpace(m_usernameLabel->getPosition())
+                                          : m_usernameLabel->getPosition();
+
+        float nearestDist = -1.f;
+        float leftmostX = 0.f;
+        for (auto* btn : found) {
+            auto* p = btn->getParent();
+            CCPoint world = p ? p->convertToWorldSpace(btn->getPosition()) : btn->getPosition();
+            float dx = world.x - labelWorld.x;
+            float dy = world.y - labelWorld.y;
+            float dist = std::sqrt(dx * dx + dy * dy);
+            log::info("[Nicknames]   candidate world=({:.1f},{:.1f}) distToName={:.1f}",
+                      world.x,
+                      world.y,
+                      dist);
+            if (nearestDist < 0.f || dist < nearestDist) {
+                nearestDist = dist;
+                m_fields->smallInfoIcon = btn;
+            }
+            if (!m_fields->bigInfoIcon || world.x < leftmostX) {
+                leftmostX = world.x;
+                m_fields->bigInfoIcon = btn;
+            }
+        }
+        // If there's only one match, it can't be both -- the one next to
+        // the name matters far more (it visibly breaks if left alone), so
+        // keep that role and give up the clone-template one instead of
+        // silently double-booking a single button for two different jobs.
+        if (m_fields->bigInfoIcon == m_fields->smallInfoIcon)
+            m_fields->bigInfoIcon = nullptr;
+
+        if (m_fields->smallInfoIcon) {
+            float rightEdge = labelRightEdgeIn(m_usernameLabel, m_fields->smallInfoIcon->getParent());
+            m_fields->smallInfoIconGap = m_fields->smallInfoIcon->getPositionX() - rightEdge;
+        }
+        log::info("[Nicknames] smallInfoIcon found={} gap={:.1f} bigInfoIcon found={}",
+                  m_fields->smallInfoIcon != nullptr,
+                  m_fields->smallInfoIconGap,
+                  m_fields->bigInfoIcon != nullptr);
+    }
+
     // Rebuilds the whole name display (label text, real-name-in-parens,
-    // button position) from m_fields -- called on first load and again
-    // after the rename popup saves/resets, so both paths stay in sync
-    // without needing a full page reload.
+    // info-icon position, button) from m_fields -- called on first load
+    // and again after the rename popup saves/resets, so both paths stay
+    // in sync without needing a full page reload.
     void refreshNameDisplay() {
         if (!m_usernameLabel)
             return;
@@ -184,16 +260,11 @@ class $modify(NNProfilePage, ProfilePage) {
         m_usernameLabel->setString(display.c_str());
 
         // Same "position computed once from the real name's width" issue
-        // already fixed for list cells, but for the small info-icon
-        // button next to the name instead of the name label itself --
-        // without this it just sits wherever the real (usually longer)
-        // name put it, leaving a visible gap next to a shorter nickname.
-        if (m_fields->infoIcon) {
-            auto pos = m_usernameLabel->getPosition();
-            auto anchor = m_usernameLabel->getAnchorPoint();
-            float width = m_usernameLabel->getContentSize().width * m_usernameLabel->getScaleX();
-            float rightEdge = pos.x + width * (1.f - anchor.x);
-            m_fields->infoIcon->setPositionX(rightEdge + m_fields->infoIconGap);
+        // already fixed for list cells, but for the small info-icon next
+        // to the name instead of the name label itself.
+        if (m_fields->smallInfoIcon) {
+            float rightEdge = labelRightEdgeIn(m_usernameLabel, m_fields->smallInfoIcon->getParent());
+            m_fields->smallInfoIcon->setPositionX(rightEdge + m_fields->smallInfoIconGap);
         }
 
         auto* parent = m_usernameLabel->getParent();
@@ -201,12 +272,7 @@ class $modify(NNProfilePage, ProfilePage) {
             return;
 
         // Rebuilding (first load, or a save/reset) -- drop anything from
-        // last time so nothing stacks up. Recursive on purpose: exactly
-        // where these get added has moved twice already while dialing
-        // this in, and a shallow lookup on the wrong node is what caused
-        // a real, screenshot-caught bug (silently never finding the old
-        // one and stacking a fresh copy on every refresh instead of
-        // replacing it).
+        // last time so nothing stacks up.
         if (auto* existing = this->getChildByIDRecursive("nicknames-real-name-label"))
             existing->removeFromParent();
         if (auto* existing = this->getChildByIDRecursive("nicknames-change-name-btn"))
@@ -225,49 +291,17 @@ class $modify(NNProfilePage, ProfilePage) {
             parent->addChild(realLabel, 100);
         }
 
-        // Nigel's ask (2026-09-07): "just copy paste the use one and put
-        // it lower" -- m_buttons holds exactly that left-side column of
-        // small circular buttons (info / comment history / "USE" on
-        // someone else's profile). Rather than build our own look from
-        // scratch (a plain tinted circle, which didn't match), clone
-        // whichever one of those sits lowest -- same sprite frame, so
-        // it's a pixel-perfect copy of a real button, not a guess -- and
-        // slot ours in right below it using the same vertical gap those
-        // buttons already use between each other.
-        CCMenuItemSpriteExtra* lowest = nullptr;
-        CCMenuItemSpriteExtra* secondLowest = nullptr;
-        log::info("[Nicknames] m_buttons={} count={}",
-                  fmt::ptr(m_buttons),
-                  m_buttons ? m_buttons->count() : 0);
-        if (m_buttons) {
-            for (auto* obj : CCArrayExt<CCObject*>(m_buttons)) {
-                log::info("[Nicknames] m_buttons entry: {}", typeid(*obj).name());
-                auto* item = typeinfo_cast<CCMenuItemSpriteExtra*>(obj);
-                if (!item)
-                    continue;
-                log::info("[Nicknames]   -> is a CCMenuItemSpriteExtra @ ({:.1f},{:.1f}) parent={}",
-                          item->getPositionX(),
-                          item->getPositionY(),
-                          fmt::ptr(item->getParent()));
-                if (!lowest || item->getPositionY() < lowest->getPositionY()) {
-                    secondLowest = lowest;
-                    lowest = item;
-                } else if (!secondLowest || item->getPositionY() < secondLowest->getPositionY()) {
-                    secondLowest = item;
-                }
-            }
-        }
-        log::info("[Nicknames] lowest found={}", lowest != nullptr);
-
-        if (lowest) {
-            float gap = secondLowest ? (secondLowest->getPositionY() - lowest->getPositionY()) : 45.f;
-
-            // Read the field directly rather than calling getNormalImage()
-            // -- that getter's binding doesn't list a Windows address (it
-            // may just be vtable-dispatched and fine, but the plain data
-            // member is unambiguous on every platform).
+        // Nigel's ask: "copy paste the use one and put it lower." Can't
+        // reliably tell "USE" apart from everything else on the page (no
+        // known sprite frame for it, and it isn't always even present --
+        // only shows on someone else's profile), but the big info-icon
+        // button IS reliably identifiable and always present, so clone
+        // its exact look and anchor to it instead, positioned just below
+        // it using its own height as spacing rather than a guessed gap.
+        if (m_fields->bigInfoIcon) {
+            auto* anchorBtn = m_fields->bigInfoIcon;
             CCSprite* copySpr = nullptr;
-            if (auto* origSpr = typeinfo_cast<CCSprite*>(lowest->m_pNormalImage))
+            if (auto* origSpr = typeinfo_cast<CCSprite*>(anchorBtn->m_pNormalImage))
                 copySpr = CCSprite::createWithSpriteFrame(origSpr->displayFrame());
             if (!copySpr)
                 copySpr = CCSprite::create("circle.png");
@@ -275,36 +309,24 @@ class $modify(NNProfilePage, ProfilePage) {
             auto btn = CCMenuItemSpriteExtra::create(copySpr, this, menu_selector(NNProfilePage::onChangeName));
             btn->setID("nicknames-change-name-btn");
 
-            // Deliberately NOT added into `lowest`'s own menu -- a real
-            // screenshot showed the actual "i" info button visibly move
-            // once a 4th item joined that menu (and the new button was
-            // nowhere to be seen), almost certainly GD's own layout for
+            // Positioned independently (not added into anchorBtn's own
+            // menu) -- doing that once already made a real, unrelated
+            // button visibly move, almost certainly GD's own layout for
             // that specific menu reflowing around a child count it
-            // wasn't built for. Position independently instead, in
-            // `parent`'s own space (converting through world space since
-            // `lowest` may not share that space directly) -- copies the
-            // look without touching anything GD manages itself.
-            auto* lowestParent = lowest->getParent();
-            auto worldPos = lowestParent ? lowestParent->convertToWorldSpace(lowest->getPosition())
-                                          : lowest->getPosition();
-            auto localPos = parent->convertToNodeSpace(worldPos);
-            btn->setPosition(localPos.x, localPos.y - gap);
+            // wasn't built for.
+            float gap = anchorBtn->getContentSize().height * anchorBtn->getScale() + 10.f;
+            auto* anchorParent = anchorBtn->getParent();
+            CCPoint world = anchorParent ? anchorParent->convertToWorldSpace(anchorBtn->getPosition())
+                                          : anchorBtn->getPosition();
+            CCPoint local = parent->convertToNodeSpace(world);
+            btn->setPosition(local.x, local.y - gap);
             parent->addChild(btn, 100);
-            log::info("[Nicknames] placed change-name btn (cloned) @ ({:.1f},{:.1f}) in parent={} "
-                      "gap={:.1f} btnContentSize=({:.1f},{:.1f}) btnScale={:.2f} visible={} opacity={}",
-                      localPos.x,
-                      localPos.y - gap,
-                      fmt::ptr(parent),
-                      gap,
-                      btn->getContentSize().width,
-                      btn->getContentSize().height,
-                      btn->getScale(),
-                      btn->isVisible(),
-                      (int)btn->getOpacity());
+            log::info("[Nicknames] placed change-name btn (cloned from big info icon) @ ({:.1f},{:.1f})",
+                      local.x,
+                      local.y - gap);
         } else {
-            // Couldn't find that button column for some reason -- fall
-            // back to a small circle near the username so there's still
-            // some way to open the rename popup.
+            // Couldn't find it -- fall back to a small circle near the
+            // username so there's still some way to open the popup.
             auto circleBg = CCSprite::create("circle.png");
             circleBg->setColor({255, 195, 60});
             auto circleSize = circleBg->getContentSize();
@@ -317,10 +339,9 @@ class $modify(NNProfilePage, ProfilePage) {
             btn->setID("nicknames-change-name-btn");
             btn->setPosition(labelPos.x, labelPos.y - 24.f);
             parent->addChild(btn, 100);
-            log::info("[Nicknames] placed change-name btn (fallback circle) @ ({:.1f},{:.1f}) in parent={}",
+            log::info("[Nicknames] placed change-name btn (fallback circle) @ ({:.1f},{:.1f})",
                       labelPos.x,
-                      labelPos.y - 24.f,
-                      fmt::ptr(parent));
+                      labelPos.y - 24.f);
         }
     }
 
