@@ -288,42 +288,24 @@ class $modify(NNProfilePage, ProfilePage) {
         // moving/vanishing three builds ago -- that was a raw addChild
         // with no updateLayout() call, not a menu-sharing problem at all).
         if (auto* leftMenu = m_mainLayer->getChildByID("left-menu")) {
-            // Real numbers from a diagnostic build finally explained this:
-            // the reference button (info icon) is roughly SQUARE (30.0 x
-            // 31.5), but a ButtonSprite reading "Name" on GJ_button_04.png
-            // is a WIDE rectangle (101.2 x 36.5, a ~2.8:1 aspect ratio).
-            // No single uniform scale can make a wide rectangle match a
-            // square target -- fitting the width crushed the height into
-            // a 10.8-unit-tall sliver (confirmed too small/distorted);
-            // fitting the height would have overflowed the width instead
-            // (the "way bigger" complaint from the attempt before that).
-            // A 9-sliced background can be resized to an arbitrary target
-            // footprint without distorting its rounded corners, which a
-            // plain sprite/ButtonSprite scale fundamentally cannot do --
-            // so build the background and text as separate pieces again,
-            // but size the BACKGROUND directly via setContentSize() to
-            // the sibling's real, measured footprint instead of trying to
-            // scale a fixed-aspect sprite to fit it.
-            CCSize targetSize{30.f, 31.5f};
+            // Nigel: "just copy the i again atp" -- back to cloning a
+            // real sibling's exact sprite (same technique proven to
+            // render correctly early on, just aimed at the right
+            // container this time). Same asset, same native size, so
+            // there's no scale/aspect-ratio math left to get wrong.
+            CCSprite* iconSpr = nullptr;
             if (auto* siblings = leftMenu->getChildren()) {
                 if (siblings->count() > 0) {
-                    if (auto* sibling = typeinfo_cast<CCNode*>(siblings->objectAtIndex(0)))
-                        targetSize = sibling->getScaledContentSize();
+                    if (auto* sibling = typeinfo_cast<CCMenuItemSpriteExtra*>(siblings->objectAtIndex(0))) {
+                        if (auto* origSpr = typeinfo_cast<CCSprite*>(sibling->m_pNormalImage))
+                            iconSpr = CCSprite::createWithSpriteFrame(origSpr->displayFrame());
+                    }
                 }
             }
+            if (!iconSpr)
+                iconSpr = CCSprite::createWithSpriteFrameName("GJ_infoIcon_001.png");
 
-            auto bg = CCScale9Sprite::createWithSpriteFrameName("GJ_button_04.png");
-            bg->setContentSize(targetSize);
-
-            auto nameLabel = CCLabelBMFont::create("Name", "bigFont.fnt");
-            auto labelSize = nameLabel->getContentSize();
-            if (labelSize.width > 0.f && labelSize.height > 0.f)
-                nameLabel->setScale(std::min((targetSize.width * 0.8f) / labelSize.width,
-                                              (targetSize.height * 0.6f) / labelSize.height));
-            nameLabel->setPosition(targetSize.width / 2.f, targetSize.height / 2.f);
-            bg->addChild(nameLabel);
-
-            auto btn = CCMenuItemSpriteExtra::create(bg, this, menu_selector(NNProfilePage::onChangeName));
+            auto btn = CCMenuItemSpriteExtra::create(iconSpr, this, menu_selector(NNProfilePage::onChangeName));
             btn->setID("nicknames-change-name-btn");
 
             // A screenshot showed this landing right after the FIRST
