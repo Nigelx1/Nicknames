@@ -115,6 +115,32 @@ static void findButtonsWithFrame(CCNode* root, CCSpriteFrame* target,
     }
 }
 
+// Finds the specific CCMenuItemSpriteExtra whose click callback is this
+// exact target+selector -- e.g. the real left-column info button, which
+// calls ProfilePage::onInfo when clicked. A real log proved that button
+// doesn't actually use the "GJ_infoIcon_001.png" frame the small icon
+// next to the username uses (findButtonsWithFrame only ever found one
+// match, never two) -- rather than guess a second frame name, this
+// identifies it by what it DOES when clicked instead of how it looks,
+// which is exact regardless of its sprite.
+static CCMenuItemSpriteExtra* findButtonByCallback(CCNode* root, CCObject* target,
+                                                    cocos2d::SEL_MenuHandler selector) {
+    if (!root)
+        return nullptr;
+    auto* children = root->getChildren();
+    if (!children)
+        return nullptr;
+    for (auto* child : CCArrayExt<CCNode*>(children)) {
+        if (auto* item = typeinfo_cast<CCMenuItemSpriteExtra*>(child)) {
+            if (item->m_pListener == target && item->m_pfnSelector == selector)
+                return item;
+        }
+        if (auto* found = findButtonByCallback(child, target, selector))
+            return found;
+    }
+    return nullptr;
+}
+
 // The x-coordinate of `label`'s right edge, expressed in `targetSpace`'s
 // own local coordinates -- safe to use even when targetSpace isn't the
 // label's own parent (converts through world space), which matters here
@@ -200,48 +226,28 @@ class $modify(NNProfilePage, ProfilePage) {
     }
 
     void captureIcons() {
+        // The small icon next to the username really does use this frame
+        // -- confirmed by a real log, this part works.
         auto* frame = CCSpriteFrameCache::sharedSpriteFrameCache()->spriteFrameByName("GJ_infoIcon_001.png");
         std::vector<CCMenuItemSpriteExtra*> found;
         findButtonsWithFrame(this, frame, found);
-        log::info("[Nicknames] found {} info-icon-styled buttons", found.size());
+        if (!found.empty())
+            m_fields->smallInfoIcon = found.front();
 
-        auto* labelParent = m_usernameLabel->getParent();
-        CCPoint labelWorld = labelParent ? labelParent->convertToWorldSpace(m_usernameLabel->getPosition())
-                                          : m_usernameLabel->getPosition();
-
-        float nearestDist = -1.f;
-        float leftmostX = 0.f;
-        for (auto* btn : found) {
-            auto* p = btn->getParent();
-            CCPoint world = p ? p->convertToWorldSpace(btn->getPosition()) : btn->getPosition();
-            float dx = world.x - labelWorld.x;
-            float dy = world.y - labelWorld.y;
-            float dist = std::sqrt(dx * dx + dy * dy);
-            log::info("[Nicknames]   candidate world=({:.1f},{:.1f}) distToName={:.1f}",
-                      world.x,
-                      world.y,
-                      dist);
-            if (nearestDist < 0.f || dist < nearestDist) {
-                nearestDist = dist;
-                m_fields->smallInfoIcon = btn;
-            }
-            if (!m_fields->bigInfoIcon || world.x < leftmostX) {
-                leftmostX = world.x;
-                m_fields->bigInfoIcon = btn;
-            }
-        }
-        // If there's only one match, it can't be both -- the one next to
-        // the name matters far more (it visibly breaks if left alone), so
-        // keep that role and give up the clone-template one instead of
-        // silently double-booking a single button for two different jobs.
-        if (m_fields->bigInfoIcon == m_fields->smallInfoIcon)
-            m_fields->bigInfoIcon = nullptr;
+        // The real left-column info button turned out NOT to use that
+        // same frame after all (a real log showed only ONE match ever
+        // found, never two, so guessing a second frame name would just
+        // be another blind guess). Find it by what it actually DOES when
+        // clicked instead -- it calls ProfilePage::onInfo -- which is
+        // exact regardless of its sprite.
+        m_fields->bigInfoIcon =
+            findButtonByCallback(this, this, static_cast<cocos2d::SEL_MenuHandler>(&ProfilePage::onInfo));
 
         if (m_fields->smallInfoIcon) {
             float rightEdge = labelRightEdgeIn(m_usernameLabel, m_fields->smallInfoIcon->getParent());
             m_fields->smallInfoIconGap = m_fields->smallInfoIcon->getPositionX() - rightEdge;
         }
-        log::info("[Nicknames] smallInfoIcon found={} gap={:.1f} bigInfoIcon found={}",
+        log::info("[Nicknames] smallInfoIcon found={} gap={:.1f} bigInfoIcon(onInfo) found={}",
                   m_fields->smallInfoIcon != nullptr,
                   m_fields->smallInfoIconGap,
                   m_fields->bigInfoIcon != nullptr);
