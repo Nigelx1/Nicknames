@@ -65,7 +65,10 @@ class $modify(NNCommentCell, CommentCell) {
 };
 
 // Profile popup -- renames the header label directly (it's exposed as its
-// own field) and adds a "Change Name" button under it.
+// own field), shows the real username grayed out in parens underneath
+// when a nickname is active (Nigel's ask, 2026-09-07 -- easy to lose track
+// of who's who if the real name isn't visible anywhere on their own
+// profile), and adds a "Change Name" button under that.
 class $modify(NNProfilePage, ProfilePage) {
     struct Fields {
         int accountID = 0;
@@ -76,21 +79,49 @@ class $modify(NNProfilePage, ProfilePage) {
         ProfilePage::loadPageFromUserInfo(score);
         if (!score || !m_usernameLabel)
             return;
-
         m_fields->accountID = score->m_accountID;
         m_fields->realName = score->m_userName;
+        refreshNameDisplay();
+    }
+
+    // Rebuilds the whole name display (label text, real-name-in-parens,
+    // button position) from m_fields -- called on first load and again
+    // after the rename popup saves/resets, so both paths stay in sync
+    // without needing a full page reload.
+    void refreshNameDisplay() {
+        if (!m_usernameLabel)
+            return;
 
         auto display = NicknameManager::get()->getDisplayName(m_fields->accountID, m_fields->realName);
+        bool hasOverride = display != m_fields->realName;
         m_usernameLabel->setString(display.c_str());
 
-        // Refreshing the page (follow/block/page-turn) re-runs this --
-        // drop any button from a previous run so they don't stack up.
+        auto* parent = m_usernameLabel->getParent();
+
+        // Rebuilding (first load, or a save/reset) -- drop anything from
+        // last time so nothing stacks up.
+        if (auto* existing = this->getChildByID("nicknames-real-name-label"))
+            existing->removeFromParent();
         if (auto* existing = this->getChildByID("nicknames-change-name-menu"))
             existing->removeFromParent();
 
-        auto* parent = m_usernameLabel->getParent();
         if (!parent)
             return;
+
+        auto labelPos = m_usernameLabel->getPosition();
+        float buttonOffset = 20.f;
+
+        if (hasOverride) {
+            auto realLabel =
+                CCLabelBMFont::create(("(" + m_fields->realName + ")").c_str(), "chatFont.fnt");
+            realLabel->setID("nicknames-real-name-label");
+            realLabel->setScale(0.5f);
+            realLabel->setColor({150, 150, 150});
+            realLabel->setOpacity(180);
+            realLabel->setPosition(labelPos.x, labelPos.y - 16.f);
+            parent->addChild(realLabel, 100);
+            buttonOffset = 36.f;
+        }
 
         auto menu = CCMenu::create();
         menu->setID("nicknames-change-name-menu");
@@ -99,12 +130,13 @@ class $modify(NNProfilePage, ProfilePage) {
         auto btn = CCMenuItemSpriteExtra::create(spr, this, menu_selector(NNProfilePage::onChangeName));
         menu->addChild(btn);
 
-        auto labelPos = m_usernameLabel->getPosition();
-        menu->setPosition(labelPos.x, labelPos.y - 20.f);
+        menu->setPosition(labelPos.x, labelPos.y - buttonOffset);
         parent->addChild(menu, 100);
     }
 
     void onChangeName(CCObject*) {
-        RenamePopup::create(m_fields->accountID, m_fields->realName, m_usernameLabel)->show();
+        RenamePopup::create(m_fields->accountID, m_fields->realName, [this] {
+            refreshNameDisplay();
+        })->show();
     }
 };

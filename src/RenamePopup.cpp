@@ -3,9 +3,9 @@
 
 using namespace geode::prelude;
 
-RenamePopup* RenamePopup::create(int accountID, std::string realName, CCLabelBMFont* labelToRefresh) {
+RenamePopup* RenamePopup::create(int accountID, std::string realName, std::function<void()> onChanged) {
     auto ret = new RenamePopup();
-    if (ret && ret->init(accountID, realName, labelToRefresh)) {
+    if (ret && ret->init(accountID, realName, onChanged)) {
         ret->autorelease();
         return ret;
     }
@@ -13,13 +13,13 @@ RenamePopup* RenamePopup::create(int accountID, std::string realName, CCLabelBMF
     return nullptr;
 }
 
-bool RenamePopup::init(int accountID, std::string realName, CCLabelBMFont* labelToRefresh) {
+bool RenamePopup::init(int accountID, std::string realName, std::function<void()> onChanged) {
     if (!Popup::init(240.f, 140.f))
         return false;
 
     m_accountID = accountID;
     m_realName = realName;
-    m_labelToRefresh = labelToRefresh;
+    m_onChanged = onChanged;
 
     this->setTitle("Change Display Name");
 
@@ -43,16 +43,14 @@ bool RenamePopup::init(int accountID, std::string realName, CCLabelBMFont* label
 void RenamePopup::onSave(CCObject*) {
     std::string text(m_input->getString());
     NicknameManager::get()->setNickname(m_accountID, text);
-    if (m_labelToRefresh) {
-        auto display = NicknameManager::get()->getDisplayName(m_accountID, m_realName);
-        m_labelToRefresh->setString(display.c_str());
-    }
+    if (m_onChanged)
+        m_onChanged();
     this->onClose(nullptr);
 }
 
 void RenamePopup::onReset(CCObject*) {
     NicknameManager::get()->setNickname(m_accountID, "");
-    if (m_labelToRefresh)
-        m_labelToRefresh->setString(m_realName.c_str());
+    if (m_onChanged)
+        m_onChanged();
     this->onClose(nullptr);
 }
