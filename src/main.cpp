@@ -68,6 +68,21 @@ static void applyNicknameToChildren(CCNode* root, std::string const& realName, i
                     float oldWidth = label->getContentSize().width * label->getScaleX();
                     float leftEdge = pos.x - oldWidth * anchor.x;
 
+                    log::info("[Nicknames] {} cell: '{}' (len {}) -> '{}' (len {})",
+                              cellKind,
+                              realName,
+                              realName.size(),
+                              display,
+                              display.size());
+
+                    // Clearing first forces a full internal rebuild of
+                    // the label's glyph geometry instead of whatever
+                    // partial/diff-based update setString() might try
+                    // against the OLD string on its own -- cheap
+                    // insurance against exactly the kind of leftover-
+                    // glyph artifact a real screenshot showed (extra
+                    // repeated characters trailing the real nickname).
+                    label->setString("");
                     label->setString(display.c_str());
 
                     auto it = s_defaultLabelScale.find(cellKind);
@@ -263,9 +278,33 @@ class $modify(NNProfilePage, ProfilePage) {
         // moving/vanishing three builds ago -- that was a raw addChild
         // with no updateLayout() call, not a menu-sharing problem at all).
         if (auto* leftMenu = m_mainLayer->getChildByID("left-menu")) {
-            auto spr = CCSprite::createWithSpriteFrameName("GJ_infoBtn_001.png");
-            spr->setScale(0.63f);
-            auto btn = CCMenuItemSpriteExtra::create(spr, this, menu_selector(NNProfilePage::onChangeName));
+            // Nigel: "the button being a second i isn't really the best
+            // option, just have it say Name or sum like that." Swap the
+            // info-icon graphic for a plain circle + text -- sized to
+            // match a REAL sibling already in this exact menu (not
+            // another guessed scale; two guessed sizes already turned
+            // out wrong elsewhere in this mod).
+            auto circleBg = CCSprite::create("circle.png");
+            if (auto* siblings = leftMenu->getChildren()) {
+                if (siblings->count() > 0) {
+                    if (auto* sibling = typeinfo_cast<CCNode*>(siblings->objectAtIndex(0))) {
+                        auto siblingSize = sibling->getScaledContentSize();
+                        auto ownSize = circleBg->getContentSize();
+                        if (ownSize.width > 0.f && ownSize.height > 0.f)
+                            circleBg->setScale(std::min(siblingSize.width / ownSize.width,
+                                                         siblingSize.height / ownSize.height));
+                    }
+                }
+            }
+            circleBg->setColor({255, 195, 60});
+
+            auto circleSize = circleBg->getContentSize();
+            auto nameLabel = CCLabelBMFont::create("Name", "bigFont.fnt");
+            nameLabel->setScale(0.3f);
+            nameLabel->setPosition(circleSize.width / 2.f, circleSize.height / 2.f);
+            circleBg->addChild(nameLabel);
+
+            auto btn = CCMenuItemSpriteExtra::create(circleBg, this, menu_selector(NNProfilePage::onChangeName));
             btn->setID("nicknames-change-name-btn");
             leftMenu->addChild(btn);
             if (m_buttons)
