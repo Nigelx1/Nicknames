@@ -13,20 +13,28 @@
 
 using namespace geode::prelude;
 
-// Cross-checked against a real, unmodified row rather than estimated:
-// these cells sometimes shrink the name label to fit a long real name
-// into a fixed column width, and that shrink amount isn't a fixed,
-// guessable constant. Resetting to a hardcoded 1.0 ("no shrink") was
-// tried and was wrong too -- a real screenshot showed nicknames then
-// rendering way TOO big, proving these cells don't render names at
-// native 1.0 scale even normally. So instead of guessing a number at
-// all, bank the scale actually observed on a normal (non-renamed) row
-// of each cell type the first time one is seen, and reuse THAT exact,
-// real value whenever a nickname needs to replace a name whose own
-// scale might already be shrunk for its own length. Keyed per cell
-// type since leaderboard/friends-list/comment cells could each use a
-// different default.
-static std::unordered_map<std::string, float> s_defaultLabelScale;
+// Cross-checked against real, unmodified rows rather than estimated.
+// These cells actually do two things with a name label, both of which
+// need to be reproduced, not just one:
+//   1. Short names render at a real "natural" scale (not a guessed 1.0
+//      -- that overshot in testing).
+//   2. Names too wide to fit the column at that natural scale get
+//      shrunk further, DYNAMICALLY, just enough to fit -- not to some
+//      fixed smaller scale. A short nickname replacing a long real name
+//      needs the natural scale (fixed once, wrongly assumed enough);
+//      a LONG nickname needs the same per-length shrink real names get,
+//      or it overflows the column (Nigel: typed a deliberately long
+//      nickname to check this, and it did).
+// Both numbers are learned from real rows, never guessed: naturalScale
+// converges to the largest scale seen for a cell type (an unclamped
+// name is never scaled UP, so the max observed IS the natural value);
+// maxWidth is learned from any row whose scale comes in below that,
+// which only happens when GD itself had to shrink it to fit.
+struct LabelSizing {
+    float naturalScale = 0.f;
+    float maxWidth = 0.f;
+};
+static std::unordered_map<std::string, LabelSizing> s_labelSizing;
 
 // Every place a username shows up renders it as a plain CCLabelBMFont with
 // that exact string -- rather than reverse-engineer each cell's internal
@@ -47,11 +55,23 @@ static void applyNicknameToChildren(CCNode* root, std::string const& realName, i
         if (auto* label = typeinfo_cast<CCLabelBMFont*>(child)) {
             auto const* str = label->getString();
             if (str && realName == str) {
+                auto& sizing = s_labelSizing[cellKind];
                 if (display == realName) {
-                    // No override on this row -- its own scale IS the
-                    // real, correct size for this cell type. Bank it for
-                    // the next row that does need overriding.
-                    s_defaultLabelScale[cellKind] = label->getScaleX();
+                    // No override on this row -- learn from its real,
+                    // as-rendered state. Never scaled up, so the largest
+                    // scale seen for this cell type IS the natural one;
+                    // anything smaller than that (once known) means GD
+                    // itself shrank this particular name to fit, which
+                    // tells us the real column width to fit inside.
+                    float scaleX = label->getScaleX();
+                    float rawWidth = label->getContentSize().width;
+                    if (scaleX > sizing.naturalScale)
+                        sizing.naturalScale = scaleX;
+                    if (sizing.naturalScale > 0.f && scaleX < sizing.naturalScale - 0.001f) {
+                        float observedMax = rawWidth * scaleX;
+                        if (observedMax > sizing.maxWidth)
+                            sizing.maxWidth = observedMax;
+                    }
                 } else {
                     // These cells lay the name out flush against the icon
                     // -- the label's position is computed once, at cell-
@@ -59,37 +79,27 @@ static void applyNicknameToChildren(CCNode* root, std::string const& realName, i
                     // swapping the string leaves that position untouched,
                     // so a nickname of a different length visibly drifts
                     // off that anchor. Recompute so the label's LEFT
-                    // edge -- not its center -- stays fixed, and apply
-                    // the cross-checked default scale for this cell type
-                    // rather than inheriting whatever this specific real
-                    // name's own scale happened to be.
+                    // edge -- not its center -- stays fixed.
                     auto anchor = label->getAnchorPoint();
                     auto pos = label->getPosition();
                     float oldWidth = label->getContentSize().width * label->getScaleX();
                     float leftEdge = pos.x - oldWidth * anchor.x;
 
-                    log::info("[Nicknames] {} cell: '{}' (len {}) -> '{}' (len {})",
-                              cellKind,
-                              realName,
-                              realName.size(),
-                              display,
-                              display.size());
-
-                    // Clearing first forces a full internal rebuild of
-                    // the label's glyph geometry instead of whatever
-                    // partial/diff-based update setString() might try
-                    // against the OLD string on its own -- cheap
-                    // insurance against exactly the kind of leftover-
-                    // glyph artifact a real screenshot showed (extra
-                    // repeated characters trailing the real nickname).
-                    label->setString("");
                     label->setString(display.c_str());
 
-                    auto it = s_defaultLabelScale.find(cellKind);
-                    float scale = it != s_defaultLabelScale.end() ? it->second : label->getScaleX();
+                    // Natural scale by default, same as any normal short
+                    // name -- but shrink further if the nickname itself
+                    // is too wide to fit at that scale, exactly like GD
+                    // does for a long real name (a nickname can be just
+                    // as long as any real username, and needs the same
+                    // per-length treatment or it overflows the column).
+                    float rawWidth = label->getContentSize().width;
+                    float scale = sizing.naturalScale > 0.f ? sizing.naturalScale : label->getScaleX();
+                    if (sizing.maxWidth > 0.f && rawWidth * scale > sizing.maxWidth)
+                        scale = sizing.maxWidth / rawWidth;
                     label->setScale(scale);
 
-                    float newWidth = label->getContentSize().width * scale;
+                    float newWidth = rawWidth * scale;
                     label->setPositionX(leftEdge + newWidth * anchor.x);
                 }
                 continue;
@@ -278,34 +288,34 @@ class $modify(NNProfilePage, ProfilePage) {
         // moving/vanishing three builds ago -- that was a raw addChild
         // with no updateLayout() call, not a menu-sharing problem at all).
         if (auto* leftMenu = m_mainLayer->getChildByID("left-menu")) {
-            // Nigel: "the button being a second i isn't really the best
-            // option, just have it say Name or sum like that." Swap the
-            // info-icon graphic for a plain circle + text -- sized to
-            // match a REAL sibling already in this exact menu (not
-            // another guessed scale; two guessed sizes already turned
-            // out wrong elsewhere in this mod).
-            auto circleBg = CCSprite::create("circle.png");
+            // Nigel: "make the name button like that USE button" -- a
+            // homemade circle.png + child label didn't render reliably
+            // (a screenshot showed the background essentially invisible
+            // with just bare "NAME" text floating above the column,
+            // likely a scale mismatch between the background and its
+            // child). Use a real, self-contained ButtonSprite instead --
+            // background and text baked together as one proven, working
+            // GD button construction (the same kind of pill-shaped
+            // button USE itself is) rather than two separately-scaled
+            // pieces -- then scale the WHOLE thing to match a real
+            // sibling's rendered size, cross-checked rather than
+            // guessed.
+            auto spr = ButtonSprite::create("Name", "bigFont.fnt", "GJ_button_04.png", 0.8f);
+            auto btn = CCMenuItemSpriteExtra::create(spr, this, menu_selector(NNProfilePage::onChangeName));
+            btn->setID("nicknames-change-name-btn");
+
             if (auto* siblings = leftMenu->getChildren()) {
                 if (siblings->count() > 0) {
                     if (auto* sibling = typeinfo_cast<CCNode*>(siblings->objectAtIndex(0))) {
                         auto siblingSize = sibling->getScaledContentSize();
-                        auto ownSize = circleBg->getContentSize();
+                        auto ownSize = btn->getContentSize();
                         if (ownSize.width > 0.f && ownSize.height > 0.f)
-                            circleBg->setScale(std::min(siblingSize.width / ownSize.width,
-                                                         siblingSize.height / ownSize.height));
+                            btn->setScale(std::min(siblingSize.width / ownSize.width,
+                                                    siblingSize.height / ownSize.height));
                     }
                 }
             }
-            circleBg->setColor({255, 195, 60});
 
-            auto circleSize = circleBg->getContentSize();
-            auto nameLabel = CCLabelBMFont::create("Name", "bigFont.fnt");
-            nameLabel->setScale(0.3f);
-            nameLabel->setPosition(circleSize.width / 2.f, circleSize.height / 2.f);
-            circleBg->addChild(nameLabel);
-
-            auto btn = CCMenuItemSpriteExtra::create(circleBg, this, menu_selector(NNProfilePage::onChangeName));
-            btn->setID("nicknames-change-name-btn");
             leftMenu->addChild(btn);
             if (m_buttons)
                 m_buttons->addObject(btn);
