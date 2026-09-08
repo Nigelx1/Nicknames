@@ -97,37 +97,48 @@ class $modify(NNProfilePage, ProfilePage) {
         m_usernameLabel->setString(display.c_str());
 
         auto* parent = m_usernameLabel->getParent();
-
-        // Rebuilding (first load, or a save/reset) -- drop anything from
-        // last time so nothing stacks up.
-        if (auto* existing = this->getChildByID("nicknames-real-name-label"))
-            existing->removeFromParent();
-        if (auto* existing = this->getChildByID("nicknames-change-name-menu"))
-            existing->removeFromParent();
-
         if (!parent)
             return;
 
+        // Rebuilding (first load, or a save/reset) -- drop anything from
+        // last time so nothing stacks up. These get added to `parent`
+        // (the username label's own parent), NOT `this` -- looking them
+        // up on `this` (the previous bug) never actually found them, so
+        // every refresh silently added a fresh copy on top of the last
+        // one instead of replacing it, which is exactly the doubled,
+        // glitchy-looking button a real screenshot caught.
+        if (auto* existing = parent->getChildByID("nicknames-real-name-label"))
+            existing->removeFromParent();
+        if (auto* existing = parent->getChildByID("nicknames-change-name-menu"))
+            existing->removeFromParent();
+
         auto labelPos = m_usernameLabel->getPosition();
-        float buttonOffset = 20.f;
+        float buttonOffset = 24.f;
 
         if (hasOverride) {
             auto realLabel =
                 CCLabelBMFont::create(("(" + m_fields->realName + ")").c_str(), "chatFont.fnt");
             realLabel->setID("nicknames-real-name-label");
-            realLabel->setScale(0.5f);
+            realLabel->setScale(0.4f);
             realLabel->setColor({150, 150, 150});
             realLabel->setOpacity(180);
-            realLabel->setPosition(labelPos.x, labelPos.y - 16.f);
+            realLabel->setPosition(labelPos.x, labelPos.y - 14.f);
             parent->addChild(realLabel, 100);
-            buttonOffset = 36.f;
+            buttonOffset = 32.f;
         }
 
+        // ButtonSprite::create's own "scale" param wasn't shrinking this
+        // the way its name suggests (a real screenshot showed it rendering
+        // roughly full-size, dwarfing the whole header) -- rather than
+        // chase exactly what that parameter actually scales, force a
+        // known, predictable final size with an explicit setScale on the
+        // menu item itself instead of trusting it.
         auto menu = CCMenu::create();
         menu->setID("nicknames-change-name-menu");
 
-        auto spr = ButtonSprite::create("Change Name", "bigFont.fnt", "GJ_button_04.png", 0.6f);
+        auto spr = ButtonSprite::create("Change Name", "bigFont.fnt", "GJ_button_04.png");
         auto btn = CCMenuItemSpriteExtra::create(spr, this, menu_selector(NNProfilePage::onChangeName));
+        btn->setScale(0.45f);
         menu->addChild(btn);
 
         menu->setPosition(labelPos.x, labelPos.y - buttonOffset);
