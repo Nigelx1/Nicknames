@@ -314,14 +314,31 @@ class $modify(NNProfilePage, ProfilePage) {
             auto btn = CCMenuItemSpriteExtra::create(spr, this, menu_selector(NNProfilePage::onChangeName));
             btn->setID("nicknames-change-name-btn");
 
+            // Nigel: "that just made it worse" -- removing ButtonSprite's
+            // own unreliable scale param should have made this smaller,
+            // not bigger, so the cross-check math itself is suspect now,
+            // not just what feeds it. Rather than adjust the formula
+            // blind a 2nd time, log the actual numbers going into it.
             if (auto* siblings = leftMenu->getChildren()) {
+                log::info("[Nicknames] left-menu has {} children before adding ours", siblings->count());
                 if (siblings->count() > 0) {
                     if (auto* sibling = typeinfo_cast<CCNode*>(siblings->objectAtIndex(0))) {
                         auto siblingSize = sibling->getScaledContentSize();
                         auto ownSize = btn->getContentSize();
+                        log::info("[Nicknames] sibling[0] scaledSize=({:.1f},{:.1f}) scale={:.3f} | "
+                                  "our btn contentSize=({:.1f},{:.1f}) (pre-scale)",
+                                  siblingSize.width,
+                                  siblingSize.height,
+                                  sibling->getScale(),
+                                  ownSize.width,
+                                  ownSize.height);
                         if (ownSize.width > 0.f && ownSize.height > 0.f)
                             btn->setScale(std::min(siblingSize.width / ownSize.width,
                                                     siblingSize.height / ownSize.height));
+                        log::info("[Nicknames] computed btn scale={:.3f} -> final scaledSize=({:.1f},{:.1f})",
+                                  btn->getScale(),
+                                  btn->getScaledContentSize().width,
+                                  btn->getScaledContentSize().height);
                     }
                 }
             }
