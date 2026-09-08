@@ -30,24 +30,29 @@ static void applyNicknameToChildren(CCNode* root, std::string const& realName, i
             auto const* str = label->getString();
             if (str && realName == str) {
                 // These cells lay the name out flush against the icon --
-                // the label's own position is computed once, at cell-build
-                // time, from the REAL name's width. Just swapping the
-                // string leaves that position untouched, so a nickname of
-                // a different length visibly drifts off that anchor (a
-                // real screenshot caught this: shorter nicknames floated
-                // toward the row's center instead of sitting where the
-                // icon-adjacent real name did). Recompute the position so
-                // the label's LEFT edge -- not its center -- stays fixed,
-                // which is what actually needs to stay put here.
-                float scaleX = label->getScaleX();
-                float oldWidth = label->getContentSize().width * scaleX;
+                // the label's own position (and sometimes its scale, if
+                // the real name was long enough to need squeezing to fit
+                // the column) is computed once, at cell-build time, from
+                // the REAL name's width. Just swapping the string leaves
+                // both untouched: a real screenshot caught the position
+                // drifting for a shorter nickname (fixed below), and a
+                // second one caught the SIZE staying wrong too -- a
+                // nickname inheriting a real name's already-shrunk scale
+                // renders visibly smaller than every other row.
                 auto anchor = label->getAnchorPoint();
                 auto pos = label->getPosition();
+                float oldWidth = label->getContentSize().width * label->getScaleX();
                 float leftEdge = pos.x - oldWidth * anchor.x;
 
                 label->setString(display.c_str());
+                // Reset to a clean, un-shrunk scale rather than trying to
+                // guess whether/how much the old text had been squeezed --
+                // a nickname is virtually always shorter than whatever
+                // name needed shrinking in the first place, so it renders
+                // at its own natural size, the same as an unmodified row.
+                label->setScale(1.f);
 
-                float newWidth = label->getContentSize().width * scaleX;
+                float newWidth = label->getContentSize().width;
                 label->setPositionX(leftEdge + newWidth * anchor.x);
                 continue;
             }
@@ -120,19 +125,18 @@ class $modify(NNProfilePage, ProfilePage) {
             return;
 
         // Rebuilding (first load, or a save/reset) -- drop anything from
-        // last time so nothing stacks up. These get added to `parent`
-        // (the username label's own parent), NOT `this` -- looking them
-        // up on `this` (the previous bug) never actually found them, so
-        // every refresh silently added a fresh copy on top of the last
-        // one instead of replacing it, which is exactly the doubled,
-        // glitchy-looking button a real screenshot caught.
-        if (auto* existing = parent->getChildByID("nicknames-real-name-label"))
+        // last time so nothing stacks up. Recursive on purpose: exactly
+        // where these get added has moved twice already while dialing
+        // this in, and a shallow lookup on the wrong node is what caused
+        // a real, screenshot-caught bug (silently never finding the old
+        // one and stacking a fresh copy on every refresh instead of
+        // replacing it).
+        if (auto* existing = this->getChildByIDRecursive("nicknames-real-name-label"))
             existing->removeFromParent();
-        if (auto* existing = parent->getChildByID("nicknames-change-name-menu"))
+        if (auto* existing = this->getChildByIDRecursive("nicknames-change-name-btn"))
             existing->removeFromParent();
 
         auto labelPos = m_usernameLabel->getPosition();
-        float buttonOffset = 24.f;
 
         if (hasOverride) {
             auto realLabel =
@@ -143,32 +147,70 @@ class $modify(NNProfilePage, ProfilePage) {
             realLabel->setOpacity(180);
             realLabel->setPosition(labelPos.x, labelPos.y - 14.f);
             parent->addChild(realLabel, 100);
-            buttonOffset = 32.f;
         }
 
-        // Nigel's ask (2026-09-07): match the small circular buttons on
-        // the left (info/comment history/USE), not a wide rectangular
-        // text button. Those use baked-in circular graphics unique to
-        // each one -- there's no generic "circle button" GD asset to
-        // reuse -- so this builds one the same way plenty of Geode mods
-        // do: a plain 32x32 circle.png tinted to a color, with a short
-        // label on top, both wrapped in the menu item.
-        auto menu = CCMenu::create();
-        menu->setID("nicknames-change-name-menu");
+        // Nigel's ask (2026-09-07): "just copy paste the use one and put
+        // it lower" -- m_buttons holds exactly that left-side column of
+        // small circular buttons (info / comment history / "USE" on
+        // someone else's profile). Rather than build our own look from
+        // scratch (a plain tinted circle, which didn't match), clone
+        // whichever one of those sits lowest -- same sprite frame, so
+        // it's a pixel-perfect copy of a real button, not a guess -- and
+        // slot ours in right below it using the same vertical gap those
+        // buttons already use between each other.
+        CCMenuItemSpriteExtra* lowest = nullptr;
+        CCMenuItemSpriteExtra* secondLowest = nullptr;
+        if (m_buttons) {
+            for (auto* obj : CCArrayExt<CCObject*>(m_buttons)) {
+                auto* item = typeinfo_cast<CCMenuItemSpriteExtra*>(obj);
+                if (!item)
+                    continue;
+                if (!lowest || item->getPositionY() < lowest->getPositionY()) {
+                    secondLowest = lowest;
+                    lowest = item;
+                } else if (!secondLowest || item->getPositionY() < secondLowest->getPositionY()) {
+                    secondLowest = item;
+                }
+            }
+        }
 
-        auto circleBg = CCSprite::create("circle.png");
-        circleBg->setColor({255, 195, 60});
-        auto circleSize = circleBg->getContentSize();
-        auto label = CCLabelBMFont::create("Name", "bigFont.fnt");
-        label->setScale(0.3f);
-        label->setPosition(circleSize.width / 2.f, circleSize.height / 2.f);
-        circleBg->addChild(label);
+        if (lowest) {
+            float gap = secondLowest ? (secondLowest->getPositionY() - lowest->getPositionY()) : 45.f;
 
-        auto btn = CCMenuItemSpriteExtra::create(circleBg, this, menu_selector(NNProfilePage::onChangeName));
-        menu->addChild(btn);
+            // Read the field directly rather than calling getNormalImage()
+            // -- that getter's binding doesn't list a Windows address (it
+            // may just be vtable-dispatched and fine, but the plain data
+            // member is unambiguous on every platform).
+            CCSprite* copySpr = nullptr;
+            if (auto* origSpr = typeinfo_cast<CCSprite*>(lowest->m_pNormalImage))
+                copySpr = CCSprite::createWithSpriteFrame(origSpr->displayFrame());
+            if (!copySpr)
+                copySpr = CCSprite::create("circle.png");
 
-        menu->setPosition(labelPos.x, labelPos.y - buttonOffset);
-        parent->addChild(menu, 100);
+            auto btn = CCMenuItemSpriteExtra::create(copySpr, this, menu_selector(NNProfilePage::onChangeName));
+            btn->setID("nicknames-change-name-btn");
+            btn->setPosition(lowest->getPositionX(), lowest->getPositionY() - gap);
+            if (auto* menu = lowest->getParent())
+                menu->addChild(btn);
+            else
+                parent->addChild(btn, 100);
+        } else {
+            // Couldn't find that button column for some reason -- fall
+            // back to a small circle near the username so there's still
+            // some way to open the rename popup.
+            auto circleBg = CCSprite::create("circle.png");
+            circleBg->setColor({255, 195, 60});
+            auto circleSize = circleBg->getContentSize();
+            auto label = CCLabelBMFont::create("Name", "bigFont.fnt");
+            label->setScale(0.3f);
+            label->setPosition(circleSize.width / 2.f, circleSize.height / 2.f);
+            circleBg->addChild(label);
+
+            auto btn = CCMenuItemSpriteExtra::create(circleBg, this, menu_selector(NNProfilePage::onChangeName));
+            btn->setID("nicknames-change-name-btn");
+            btn->setPosition(labelPos.x, labelPos.y - 24.f);
+            parent->addChild(btn, 100);
+        }
     }
 
     void onChangeName(CCObject*) {
