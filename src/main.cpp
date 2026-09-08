@@ -300,7 +300,17 @@ class $modify(NNProfilePage, ProfilePage) {
             // pieces -- then scale the WHOLE thing to match a real
             // sibling's rendered size, cross-checked rather than
             // guessed.
-            auto spr = ButtonSprite::create("Name", "bigFont.fnt", "GJ_button_04.png", 0.8f);
+            //
+            // Deliberately the 3-arg overload with no internal scale
+            // param -- ButtonSprite::create's own "scale" argument was
+            // ALREADY proven unreliable earlier in this exact project
+            // (rendered close to full/native size regardless of the
+            // value passed, an actual real screenshot showed it dwarfing
+            // the whole profile header) and re-adding it here fought
+            // against the cross-checked setScale() below instead of
+            // cooperating with it, which is exactly why the button came
+            // out oversized enough to cut into neighboring buttons.
+            auto spr = ButtonSprite::create("Name", "bigFont.fnt", "GJ_button_04.png");
             auto btn = CCMenuItemSpriteExtra::create(spr, this, menu_selector(NNProfilePage::onChangeName));
             btn->setID("nicknames-change-name-btn");
 
