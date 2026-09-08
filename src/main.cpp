@@ -288,60 +288,43 @@ class $modify(NNProfilePage, ProfilePage) {
         // moving/vanishing three builds ago -- that was a raw addChild
         // with no updateLayout() call, not a menu-sharing problem at all).
         if (auto* leftMenu = m_mainLayer->getChildByID("left-menu")) {
-            // Nigel: "make the name button like that USE button" -- a
-            // homemade circle.png + child label didn't render reliably
-            // (a screenshot showed the background essentially invisible
-            // with just bare "NAME" text floating above the column,
-            // likely a scale mismatch between the background and its
-            // child). Use a real, self-contained ButtonSprite instead --
-            // background and text baked together as one proven, working
-            // GD button construction (the same kind of pill-shaped
-            // button USE itself is) rather than two separately-scaled
-            // pieces -- then scale the WHOLE thing to match a real
-            // sibling's rendered size, cross-checked rather than
-            // guessed.
-            //
-            // Deliberately the 3-arg overload with no internal scale
-            // param -- ButtonSprite::create's own "scale" argument was
-            // ALREADY proven unreliable earlier in this exact project
-            // (rendered close to full/native size regardless of the
-            // value passed, an actual real screenshot showed it dwarfing
-            // the whole profile header) and re-adding it here fought
-            // against the cross-checked setScale() below instead of
-            // cooperating with it, which is exactly why the button came
-            // out oversized enough to cut into neighboring buttons.
-            auto spr = ButtonSprite::create("Name", "bigFont.fnt", "GJ_button_04.png");
-            auto btn = CCMenuItemSpriteExtra::create(spr, this, menu_selector(NNProfilePage::onChangeName));
-            btn->setID("nicknames-change-name-btn");
-
-            // Nigel: "that just made it worse" -- removing ButtonSprite's
-            // own unreliable scale param should have made this smaller,
-            // not bigger, so the cross-check math itself is suspect now,
-            // not just what feeds it. Rather than adjust the formula
-            // blind a 2nd time, log the actual numbers going into it.
+            // Real numbers from a diagnostic build finally explained this:
+            // the reference button (info icon) is roughly SQUARE (30.0 x
+            // 31.5), but a ButtonSprite reading "Name" on GJ_button_04.png
+            // is a WIDE rectangle (101.2 x 36.5, a ~2.8:1 aspect ratio).
+            // No single uniform scale can make a wide rectangle match a
+            // square target -- fitting the width crushed the height into
+            // a 10.8-unit-tall sliver (confirmed too small/distorted);
+            // fitting the height would have overflowed the width instead
+            // (the "way bigger" complaint from the attempt before that).
+            // A 9-sliced background can be resized to an arbitrary target
+            // footprint without distorting its rounded corners, which a
+            // plain sprite/ButtonSprite scale fundamentally cannot do --
+            // so build the background and text as separate pieces again,
+            // but size the BACKGROUND directly via setContentSize() to
+            // the sibling's real, measured footprint instead of trying to
+            // scale a fixed-aspect sprite to fit it.
+            CCSize targetSize{30.f, 31.5f};
             if (auto* siblings = leftMenu->getChildren()) {
-                log::info("[Nicknames] left-menu has {} children before adding ours", siblings->count());
                 if (siblings->count() > 0) {
-                    if (auto* sibling = typeinfo_cast<CCNode*>(siblings->objectAtIndex(0))) {
-                        auto siblingSize = sibling->getScaledContentSize();
-                        auto ownSize = btn->getContentSize();
-                        log::info("[Nicknames] sibling[0] scaledSize=({:.1f},{:.1f}) scale={:.3f} | "
-                                  "our btn contentSize=({:.1f},{:.1f}) (pre-scale)",
-                                  siblingSize.width,
-                                  siblingSize.height,
-                                  sibling->getScale(),
-                                  ownSize.width,
-                                  ownSize.height);
-                        if (ownSize.width > 0.f && ownSize.height > 0.f)
-                            btn->setScale(std::min(siblingSize.width / ownSize.width,
-                                                    siblingSize.height / ownSize.height));
-                        log::info("[Nicknames] computed btn scale={:.3f} -> final scaledSize=({:.1f},{:.1f})",
-                                  btn->getScale(),
-                                  btn->getScaledContentSize().width,
-                                  btn->getScaledContentSize().height);
-                    }
+                    if (auto* sibling = typeinfo_cast<CCNode*>(siblings->objectAtIndex(0)))
+                        targetSize = sibling->getScaledContentSize();
                 }
             }
+
+            auto bg = CCScale9Sprite::createWithSpriteFrameName("GJ_button_04.png");
+            bg->setContentSize(targetSize);
+
+            auto nameLabel = CCLabelBMFont::create("Name", "bigFont.fnt");
+            auto labelSize = nameLabel->getContentSize();
+            if (labelSize.width > 0.f && labelSize.height > 0.f)
+                nameLabel->setScale(std::min((targetSize.width * 0.8f) / labelSize.width,
+                                              (targetSize.height * 0.6f) / labelSize.height));
+            nameLabel->setPosition(targetSize.width / 2.f, targetSize.height / 2.f);
+            bg->addChild(nameLabel);
+
+            auto btn = CCMenuItemSpriteExtra::create(bg, this, menu_selector(NNProfilePage::onChangeName));
+            btn->setID("nicknames-change-name-btn");
 
             // A screenshot showed this landing right after the FIRST
             // button (info) instead of at the end, past USE -- Geode's
