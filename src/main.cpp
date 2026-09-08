@@ -7,7 +7,24 @@
 #include <Geode/modify/CommentCell.hpp>
 #include <Geode/modify/ProfilePage.hpp>
 
+#include <unordered_map>
+
 using namespace geode::prelude;
+
+// Cross-checked against a real, unmodified row rather than estimated:
+// these cells sometimes shrink the name label to fit a long real name
+// into a fixed column width, and that shrink amount isn't a fixed,
+// guessable constant. Resetting to a hardcoded 1.0 ("no shrink") was
+// tried and was wrong too -- a real screenshot showed nicknames then
+// rendering way TOO big, proving these cells don't render names at
+// native 1.0 scale even normally. So instead of guessing a number at
+// all, bank the scale actually observed on a normal (non-renamed) row
+// of each cell type the first time one is seen, and reuse THAT exact,
+// real value whenever a nickname needs to replace a name whose own
+// scale might already be shrunk for its own length. Keyed per cell
+// type since leaderboard/friends-list/comment cells could each use a
+// different default.
+static std::unordered_map<std::string, float> s_defaultLabelScale;
 
 // Every place a username shows up renders it as a plain CCLabelBMFont with
 // that exact string -- rather than reverse-engineer each cell's internal
@@ -16,12 +33,11 @@ using namespace geode::prelude;
 // (m_score, m_comment, etc.) completely untouched -- this only ever
 // changes what's rendered, so "view profile"/"send message"/anything else
 // that relies on the real account data keeps working normally.
-static void applyNicknameToChildren(CCNode* root, std::string const& realName, int accountID) {
+static void applyNicknameToChildren(CCNode* root, std::string const& realName, int accountID,
+                                     std::string const& cellKind) {
     if (!root || realName.empty())
         return;
     auto display = NicknameManager::get()->getDisplayName(accountID, realName);
-    if (display == realName)
-        return;
     auto* children = root->getChildren();
     if (!children)
         return;
@@ -29,35 +45,40 @@ static void applyNicknameToChildren(CCNode* root, std::string const& realName, i
         if (auto* label = typeinfo_cast<CCLabelBMFont*>(child)) {
             auto const* str = label->getString();
             if (str && realName == str) {
-                // These cells lay the name out flush against the icon --
-                // the label's own position (and sometimes its scale, if
-                // the real name was long enough to need squeezing to fit
-                // the column) is computed once, at cell-build time, from
-                // the REAL name's width. Just swapping the string leaves
-                // both untouched: a real screenshot caught the position
-                // drifting for a shorter nickname (fixed below), and a
-                // second one caught the SIZE staying wrong too -- a
-                // nickname inheriting a real name's already-shrunk scale
-                // renders visibly smaller than every other row.
-                auto anchor = label->getAnchorPoint();
-                auto pos = label->getPosition();
-                float oldWidth = label->getContentSize().width * label->getScaleX();
-                float leftEdge = pos.x - oldWidth * anchor.x;
+                if (display == realName) {
+                    // No override on this row -- its own scale IS the
+                    // real, correct size for this cell type. Bank it for
+                    // the next row that does need overriding.
+                    s_defaultLabelScale[cellKind] = label->getScaleX();
+                } else {
+                    // These cells lay the name out flush against the icon
+                    // -- the label's position is computed once, at cell-
+                    // build time, from the REAL name's width. Just
+                    // swapping the string leaves that position untouched,
+                    // so a nickname of a different length visibly drifts
+                    // off that anchor. Recompute so the label's LEFT
+                    // edge -- not its center -- stays fixed, and apply
+                    // the cross-checked default scale for this cell type
+                    // rather than inheriting whatever this specific real
+                    // name's own scale happened to be.
+                    auto anchor = label->getAnchorPoint();
+                    auto pos = label->getPosition();
+                    float oldWidth = label->getContentSize().width * label->getScaleX();
+                    float leftEdge = pos.x - oldWidth * anchor.x;
 
-                label->setString(display.c_str());
-                // Reset to a clean, un-shrunk scale rather than trying to
-                // guess whether/how much the old text had been squeezed --
-                // a nickname is virtually always shorter than whatever
-                // name needed shrinking in the first place, so it renders
-                // at its own natural size, the same as an unmodified row.
-                label->setScale(1.f);
+                    label->setString(display.c_str());
 
-                float newWidth = label->getContentSize().width;
-                label->setPositionX(leftEdge + newWidth * anchor.x);
+                    auto it = s_defaultLabelScale.find(cellKind);
+                    float scale = it != s_defaultLabelScale.end() ? it->second : label->getScaleX();
+                    label->setScale(scale);
+
+                    float newWidth = label->getContentSize().width * scale;
+                    label->setPositionX(leftEdge + newWidth * anchor.x);
+                }
                 continue;
             }
         }
-        applyNicknameToChildren(child, realName, accountID);
+        applyNicknameToChildren(child, realName, accountID, cellKind);
     }
 }
 
@@ -66,7 +87,7 @@ class $modify(NNGJScoreCell, GJScoreCell) {
     void loadFromScore(GJUserScore* score) {
         GJScoreCell::loadFromScore(score);
         if (score)
-            applyNicknameToChildren(this, score->m_userName, score->m_accountID);
+            applyNicknameToChildren(this, score->m_userName, score->m_accountID, "score");
     }
 };
 
@@ -75,7 +96,7 @@ class $modify(NNGJUserCell, GJUserCell) {
     void loadFromScore(GJUserScore* score) {
         GJUserCell::loadFromScore(score);
         if (score)
-            applyNicknameToChildren(this, score->m_userName, score->m_accountID);
+            applyNicknameToChildren(this, score->m_userName, score->m_accountID, "user");
     }
 };
 
@@ -84,7 +105,7 @@ class $modify(NNCommentCell, CommentCell) {
     void loadFromComment(GJComment* comment) {
         CommentCell::loadFromComment(comment);
         if (comment)
-            applyNicknameToChildren(this, comment->m_userName, comment->m_accountID);
+            applyNicknameToChildren(this, comment->m_userName, comment->m_accountID, "comment");
     }
 };
 
@@ -189,11 +210,22 @@ class $modify(NNProfilePage, ProfilePage) {
 
             auto btn = CCMenuItemSpriteExtra::create(copySpr, this, menu_selector(NNProfilePage::onChangeName));
             btn->setID("nicknames-change-name-btn");
-            btn->setPosition(lowest->getPositionX(), lowest->getPositionY() - gap);
-            if (auto* menu = lowest->getParent())
-                menu->addChild(btn);
-            else
-                parent->addChild(btn, 100);
+
+            // Deliberately NOT added into `lowest`'s own menu -- a real
+            // screenshot showed the actual "i" info button visibly move
+            // once a 4th item joined that menu (and the new button was
+            // nowhere to be seen), almost certainly GD's own layout for
+            // that specific menu reflowing around a child count it
+            // wasn't built for. Position independently instead, in
+            // `parent`'s own space (converting through world space since
+            // `lowest` may not share that space directly) -- copies the
+            // look without touching anything GD manages itself.
+            auto* lowestParent = lowest->getParent();
+            auto worldPos = lowestParent ? lowestParent->convertToWorldSpace(lowest->getPosition())
+                                          : lowest->getPosition();
+            auto localPos = parent->convertToNodeSpace(worldPos);
+            btn->setPosition(localPos.x, localPos.y - gap);
+            parent->addChild(btn, 100);
         } else {
             // Couldn't find that button column for some reason -- fall
             // back to a small circle near the username so there's still
