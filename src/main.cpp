@@ -115,48 +115,6 @@ static void findButtonsWithFrame(CCNode* root, CCSpriteFrame* target,
     }
 }
 
-// Finds the specific CCMenuItemSpriteExtra whose click callback is this
-// exact target+selector -- e.g. the real left-column info button, which
-// calls ProfilePage::onInfo when clicked. A real log proved that button
-// doesn't actually use the "GJ_infoIcon_001.png" frame the small icon
-// next to the username uses (findButtonsWithFrame only ever found one
-// match, never two) -- rather than guess a second frame name, this
-// identifies it by what it DOES when clicked instead of how it looks,
-// which is exact regardless of its sprite.
-static CCMenuItemSpriteExtra* findButtonByCallback(CCNode* root, CCObject* target,
-                                                    cocos2d::SEL_MenuHandler selector) {
-    if (!root)
-        return nullptr;
-    auto* children = root->getChildren();
-    if (!children)
-        return nullptr;
-    for (auto* child : CCArrayExt<CCNode*>(children)) {
-        if (auto* item = typeinfo_cast<CCMenuItemSpriteExtra*>(child)) {
-            if (item->m_pListener == target && item->m_pfnSelector == selector)
-                return item;
-        }
-        if (auto* found = findButtonByCallback(child, target, selector))
-            return found;
-    }
-    return nullptr;
-}
-
-// Every CCMenuItemSpriteExtra anywhere under root -- for dumping what's
-// actually on a page when neither frame-matching nor callback-matching
-// panned out, instead of guessing a third identification mechanism blind.
-static void findAllButtons(CCNode* root, std::vector<CCMenuItemSpriteExtra*>& out) {
-    if (!root)
-        return;
-    auto* children = root->getChildren();
-    if (!children)
-        return;
-    for (auto* child : CCArrayExt<CCNode*>(children)) {
-        if (auto* item = typeinfo_cast<CCMenuItemSpriteExtra*>(child))
-            out.push_back(item);
-        findAllButtons(child, out);
-    }
-}
-
 // The x-coordinate of `label`'s right edge, expressed in `targetSpace`'s
 // own local coordinates -- safe to use even when targetSpace isn't the
 // label's own parent (converts through world space), which matters here
@@ -209,20 +167,13 @@ class $modify(NNProfilePage, ProfilePage) {
     struct Fields {
         int accountID = 0;
         std::string realName;
-        // Two DIFFERENT buttons share the exact same "i" icon graphic:
-        // a small one immediately right of the username, and a big one
-        // in the left-side column. A real diagnostic log proved neither
-        // lives where earlier attempts assumed (the username label's own
-        // parent has exactly one child -- itself -- and m_buttons is a
-        // 39-entry grab-bag of unrelated page elements, not a clean list
-        // of left-side buttons). Found instead by matching the actual
-        // "GJ_infoIcon_001.png" sprite frame wherever it appears on the
-        // page, then telling the two apart by which is closer to the
-        // username (the small one) vs which sits furthest left (the big
-        // column one) -- captured once, before anything gets renamed.
+        // The small "i" icon immediately right of the username -- a
+        // completely different button from the left-column one, found by
+        // matching its real sprite frame (confirmed working). Captured
+        // once, before anything gets renamed, so its natural gap from the
+        // label's right edge is the REAL one, not a guess.
         CCMenuItemSpriteExtra* smallInfoIcon = nullptr;
         float smallInfoIconGap = 0.f;
-        CCMenuItemSpriteExtra* bigInfoIcon = nullptr;
         bool capturedIcons = false;
     };
 
@@ -242,55 +193,16 @@ class $modify(NNProfilePage, ProfilePage) {
     }
 
     void captureIcons() {
-        // The small icon next to the username really does use this frame
-        // -- confirmed by a real log, this part works.
         auto* frame = CCSpriteFrameCache::sharedSpriteFrameCache()->spriteFrameByName("GJ_infoIcon_001.png");
         std::vector<CCMenuItemSpriteExtra*> found;
         findButtonsWithFrame(this, frame, found);
         if (!found.empty())
             m_fields->smallInfoIcon = found.front();
 
-        // The real left-column info button turned out NOT to use that
-        // same frame after all (a real log showed only ONE match ever
-        // found, never two, so guessing a second frame name would just
-        // be another blind guess). Tried finding it by callback instead
-        // (ProfilePage::onInfo) -- also came back empty, meaning either
-        // the listener isn't literally `this` or the member-function-
-        // pointer comparison doesn't survive however Geode exposes a
-        // bound (but non-hooked) function like this. Rather than guess a
-        // third mechanism, dump every button on the page directly.
-        auto selInfo = static_cast<cocos2d::SEL_MenuHandler>(&ProfilePage::onInfo);
-        m_fields->bigInfoIcon = findButtonByCallback(this, this, selInfo);
-
-        if (!m_fields->bigInfoIcon) {
-            std::vector<CCMenuItemSpriteExtra*> all;
-            findAllButtons(this, all);
-            log::info("[Nicknames] onInfo lookup failed -- dumping all {} buttons on the page:",
-                      all.size());
-            for (auto* btn : all) {
-                auto* p = btn->getParent();
-                auto world = p ? p->convertToWorldSpace(btn->getPosition()) : btn->getPosition();
-                log::info("[Nicknames]   id='{}' world=({:.1f},{:.1f}) size=({:.1f},{:.1f}) "
-                          "listener={} listenerIsThis={} selectorMatchesOnInfo={}",
-                          btn->getID(),
-                          world.x,
-                          world.y,
-                          btn->getContentSize().width,
-                          btn->getContentSize().height,
-                          fmt::ptr(btn->m_pListener),
-                          btn->m_pListener == this,
-                          btn->m_pfnSelector == selInfo);
-            }
-        }
-
         if (m_fields->smallInfoIcon) {
             float rightEdge = labelRightEdgeIn(m_usernameLabel, m_fields->smallInfoIcon->getParent());
             m_fields->smallInfoIconGap = m_fields->smallInfoIcon->getPositionX() - rightEdge;
         }
-        log::info("[Nicknames] smallInfoIcon found={} gap={:.1f} bigInfoIcon(onInfo) found={}",
-                  m_fields->smallInfoIcon != nullptr,
-                  m_fields->smallInfoIconGap,
-                  m_fields->bigInfoIcon != nullptr);
     }
 
     // Rebuilds the whole name display (label text, real-name-in-parens,
@@ -337,39 +249,28 @@ class $modify(NNProfilePage, ProfilePage) {
             parent->addChild(realLabel, 100);
         }
 
-        // Nigel's ask: "copy paste the use one and put it lower." Can't
-        // reliably tell "USE" apart from everything else on the page (no
-        // known sprite frame for it, and it isn't always even present --
-        // only shows on someone else's profile), but the big info-icon
-        // button IS reliably identifiable and always present, so clone
-        // its exact look and anchor to it instead, positioned just below
-        // it using its own height as spacing rather than a guessed gap.
-        if (m_fields->bigInfoIcon) {
-            auto* anchorBtn = m_fields->bigInfoIcon;
-            CCSprite* copySpr = nullptr;
-            if (auto* origSpr = typeinfo_cast<CCSprite*>(anchorBtn->m_pNormalImage))
-                copySpr = CCSprite::createWithSpriteFrame(origSpr->displayFrame());
-            if (!copySpr)
-                copySpr = CCSprite::create("circle.png");
-
-            auto btn = CCMenuItemSpriteExtra::create(copySpr, this, menu_selector(NNProfilePage::onChangeName));
+        // Nigel's ask: "I want it to be exactly like the buttons on the
+        // left, on the left." Found the real mechanism from another
+        // Geode mod's source (cvolton/betterinfo-geode) instead of
+        // guessing a 4th time: the left column is a proper Geode layout
+        // menu, reachable directly as m_mainLayer->getChildByID("left-
+        // menu") -- not found via m_usernameLabel's parent (empty) or by
+        // scanning m_buttons (a 39-entry grab-bag), which is exactly why
+        // those earlier attempts never found it. It's a real AxisLayout,
+        // so adding a child and calling updateLayout() lets Geode's own
+        // layout system re-flow the whole column properly instead of
+        // silently corrupting it (the actual cause of the "i" button
+        // moving/vanishing three builds ago -- that was a raw addChild
+        // with no updateLayout() call, not a menu-sharing problem at all).
+        if (auto* leftMenu = m_mainLayer->getChildByID("left-menu")) {
+            auto spr = CCSprite::createWithSpriteFrameName("GJ_infoBtn_001.png");
+            spr->setScale(0.63f);
+            auto btn = CCMenuItemSpriteExtra::create(spr, this, menu_selector(NNProfilePage::onChangeName));
             btn->setID("nicknames-change-name-btn");
-
-            // Positioned independently (not added into anchorBtn's own
-            // menu) -- doing that once already made a real, unrelated
-            // button visibly move, almost certainly GD's own layout for
-            // that specific menu reflowing around a child count it
-            // wasn't built for.
-            float gap = anchorBtn->getContentSize().height * anchorBtn->getScale() + 10.f;
-            auto* anchorParent = anchorBtn->getParent();
-            CCPoint world = anchorParent ? anchorParent->convertToWorldSpace(anchorBtn->getPosition())
-                                          : anchorBtn->getPosition();
-            CCPoint local = parent->convertToNodeSpace(world);
-            btn->setPosition(local.x, local.y - gap);
-            parent->addChild(btn, 100);
-            log::info("[Nicknames] placed change-name btn (cloned from big info icon) @ ({:.1f},{:.1f})",
-                      local.x,
-                      local.y - gap);
+            leftMenu->addChild(btn);
+            if (m_buttons)
+                m_buttons->addObject(btn);
+            leftMenu->updateLayout();
         } else {
             // Couldn't find it -- fall back to a small circle near the
             // username so there's still some way to open the popup.
@@ -385,9 +286,6 @@ class $modify(NNProfilePage, ProfilePage) {
             btn->setID("nicknames-change-name-btn");
             btn->setPosition(labelPos.x, labelPos.y - 24.f);
             parent->addChild(btn, 100);
-            log::info("[Nicknames] placed change-name btn (fallback circle) @ ({:.1f},{:.1f})",
-                      labelPos.x,
-                      labelPos.y - 24.f);
         }
     }
 
