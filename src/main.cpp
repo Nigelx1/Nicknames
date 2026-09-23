@@ -308,6 +308,26 @@ class $modify(NNProfilePage, ProfilePage) {
             // uniform scale reconciles the two, which is what produced both
             // the "way bigger, cuts into stuff" and the squashed-sliver
             // builds. A square glyph sidesteps the whole problem.
+            // Measure a real button in this column FIRST. The clone path gets
+            // the right size for free because it reuses the same asset; a
+            // different frame does not, and the pencil turned out noticeably
+            // bigger than the info button natively. Never a guessed number --
+            // always whatever a real sibling actually renders at, which is the
+            // one sizing approach that has held up in this project.
+            CCSize siblingSize{0.f, 0.f};
+            if (auto* siblings = leftMenu->getChildren()) {
+                for (int i = 0; i < siblings->count(); i++) {
+                    auto* sib = typeinfo_cast<CCMenuItemSpriteExtra*>(siblings->objectAtIndex(i));
+                    if (!sib)
+                        continue;
+                    CCSize sz = sib->getScaledContentSize();
+                    if (sz.width > 1.f && sz.height > 1.f) {
+                        siblingSize = sz;
+                        break;
+                    }
+                }
+            }
+
             CCSprite* iconSpr = nullptr;
             char const* usedFrame = nullptr;
             static char const* const kRenameishFrames[] = {
@@ -343,6 +363,25 @@ class $modify(NNProfilePage, ProfilePage) {
             if (!iconSpr) {
                 iconSpr = CCSprite::createWithSpriteFrameName("GJ_infoIcon_001.png");
                 usedFrame = "GJ_infoIcon_001.png (last resort)";
+            }
+
+            // Match the column. Safe as a UNIFORM scale here specifically
+            // because both shapes are roughly square -- that is the whole
+            // reason a glyph was chosen over a "Name" text button, where
+            // fitting the width crushed the height and fitting the height
+            // overflowed the width. Skipped for the clone, which is already
+            // the right size by construction.
+            if (iconSpr && siblingSize.width > 1.f &&
+                std::string(usedFrame ? usedFrame : "") != "(cloned sibling)") {
+                CCSize raw = iconSpr->getContentSize();
+                if (raw.width > 1.f && raw.height > 1.f) {
+                    float fit = std::min(siblingSize.width / raw.width,
+                                         siblingSize.height / raw.height);
+                    iconSpr->setScale(fit);
+                    geode::log::info(
+                        "[Nicknames] icon sized to column: sibling=({:.1f},{:.1f}) raw=({:.1f},{:.1f}) scale={:.3f}",
+                        siblingSize.width, siblingSize.height, raw.width, raw.height, fit);
+                }
             }
             geode::log::info("[Nicknames] change-name icon: {}", usedFrame ? usedFrame : "none");
 
