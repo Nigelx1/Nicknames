@@ -293,17 +293,58 @@ class $modify(NNProfilePage, ProfilePage) {
             // render correctly early on, just aimed at the right
             // container this time). Same asset, same native size, so
             // there's no scale/aspect-ratio math left to get wrong.
+            // The button worked but wore the info icon, so the profile
+            // showed two identical "i" buttons and neither said "rename".
+            //
+            // The trap this project kept falling into was guessing a sprite
+            // frame name and finding out it was wrong only from a screenshot
+            // -- GJ_infoIcon_001 vs GJ_infoBtn_001 cost several rounds on its
+            // own. So ask the frame cache whether a name exists before using
+            // it, and fall through to the proven sibling clone if none do.
+            // A wrong guess here costs nothing now: it just isn't used.
+            //
+            // Not attempting text on the button again. The left column's
+            // slots are square and a "Name" button is a wide rectangle; no
+            // uniform scale reconciles the two, which is what produced both
+            // the "way bigger, cuts into stuff" and the squashed-sliver
+            // builds. A square glyph sidesteps the whole problem.
             CCSprite* iconSpr = nullptr;
-            if (auto* siblings = leftMenu->getChildren()) {
-                if (siblings->count() > 0) {
-                    if (auto* sibling = typeinfo_cast<CCMenuItemSpriteExtra*>(siblings->objectAtIndex(0))) {
-                        if (auto* origSpr = typeinfo_cast<CCSprite*>(sibling->m_pNormalImage))
-                            iconSpr = CCSprite::createWithSpriteFrame(origSpr->displayFrame());
+            char const* usedFrame = nullptr;
+            static char const* const kRenameishFrames[] = {
+                "GJ_editBtn_001.png",      // pencil, the closest thing GD has to "rename"
+                "GJ_editModeBtn_001.png",
+                "edit_upBtn_001.png",
+            };
+            auto* cache = CCSpriteFrameCache::sharedSpriteFrameCache();
+            for (auto const* name : kRenameishFrames) {
+                if (cache->spriteFrameByName(name)) {
+                    iconSpr = CCSprite::createWithSpriteFrameName(name);
+                    usedFrame = name;
+                    break;
+                }
+            }
+
+            // Fall back to cloning a real sibling -- same asset, same native
+            // size, no scale math. This is what shipped before and it works;
+            // it just looks like a second info button.
+            if (!iconSpr) {
+                if (auto* siblings = leftMenu->getChildren()) {
+                    if (siblings->count() > 0) {
+                        if (auto* sibling =
+                                typeinfo_cast<CCMenuItemSpriteExtra*>(siblings->objectAtIndex(0))) {
+                            if (auto* origSpr = typeinfo_cast<CCSprite*>(sibling->m_pNormalImage)) {
+                                iconSpr = CCSprite::createWithSpriteFrame(origSpr->displayFrame());
+                                usedFrame = "(cloned sibling)";
+                            }
+                        }
                     }
                 }
             }
-            if (!iconSpr)
+            if (!iconSpr) {
                 iconSpr = CCSprite::createWithSpriteFrameName("GJ_infoIcon_001.png");
+                usedFrame = "GJ_infoIcon_001.png (last resort)";
+            }
+            geode::log::info("[Nicknames] change-name icon: {}", usedFrame ? usedFrame : "none");
 
             auto btn = CCMenuItemSpriteExtra::create(iconSpr, this, menu_selector(NNProfilePage::onChangeName));
             btn->setID("nicknames-change-name-btn");
