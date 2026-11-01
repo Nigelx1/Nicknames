@@ -1,2 +1,5 @@
 build/
+# A build that never installs into the game (-DGEODE_DONT_INSTALL_MODS=ON), for
+# building while Geometry Dash is open.
+build-noinstall/
 *.geode
