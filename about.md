@@ -17,7 +17,7 @@ Open their profile and hit the extra button in the left-hand column, next to inf
 
 To undo it, open the same popup and press **Reset** — they go back to their real username immediately.
 
-While a nickname is active, their real username still shows on their profile in small grey text underneath, so you never lose track of who you're actually looking at.
+While a nickname is active, their real username still shows on their profile in small gray text underneath, so you never lose track of who you're actually looking at.
 
 ## What it doesn't touch
 
@@ -35,4 +35,4 @@ Nicknames are stored against **account IDs**, not usernames — so if someone ch
 - **Claude** (Anthropic) — wrote the code, including this page. Not a euphemism, not "AI-assisted" — the actual author of the source, and Nigel wants that said plainly
 - **cvolton** — [betterinfo-geode](https://github.com/cvolton/betterinfo-geode) is the reason the profile button works. After several failed attempts to place it, reading how a real mod adds a button to that column settled it in one go
 
-Made for Geometry Dash 2.2081 on Windows. Brrr.
+Made for Geometry Dash 2.2081 on Windows, macOS, iOS and Android. Brrr.
