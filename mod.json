@@ -12,6 +12,9 @@
   "developer": "Nigelx1",
   "description": "Give your friends whatever display name you want -- see your own nicknames for them everywhere instead of their real GD username.",
   "repository": "https://github.com/Nigelx1/Nicknames",
+  "dependencies": {
+    "geode.node-ids": ">=v1.23.0"
+  },
   "tags": [
     "utility"
   ]
