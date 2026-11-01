@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.25)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# Both Mac architectures, as Geode's mod template does: it has to be set before
+# the mod's target exists, so the SDK's own default comes too late. iOS is arm64.
+if ("${CMAKE_SYSTEM_NAME}" STREQUAL "iOS" OR IOS)
+    set(CMAKE_OSX_ARCHITECTURES "arm64")
+else()
+    set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64")
+endif()
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
 project(Nicknames VERSION 1.0.0 LANGUAGES CXX)
